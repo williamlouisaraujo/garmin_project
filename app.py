@@ -2,7 +2,7 @@ import streamlit as st
 
 from src.auth import require_password
 from src.garmin_client import fetch_activities
-from src.storage import get_sync_summary, save_activities
+from src.storage import get_accounts, get_last_sync, save_accounts, save_activities
 
 st.set_page_config(
     page_title="Garmin Dashboard",
@@ -12,51 +12,84 @@ st.set_page_config(
 
 require_password()
 
-st.title("🏠 Accueil")
-st.caption("Dashboard personnel Garmin Connect")
+st.title("🔗 Connexion & Synchronisation")
+st.caption("Gérez vos comptes Garmin Connect et synchronisez vos activités.")
 
-# ── Bouton synchronisation ────────────────────────────────────────────────────
-with st.container():
-    col_btn, col_info = st.columns([1, 3])
-    with col_btn:
-        sync = st.button("🔄 Synchroniser Garmin", use_container_width=True)
-    with col_info:
-        st.caption("Récupère les 200 dernières activités. Les activités déjà présentes sont ignorées.")
-
-if sync:
-    with st.spinner("Connexion à Garmin Connect…"):
-        try:
-            activities = fetch_activities(limit=200)
-            count_new = save_activities(activities)
-            if count_new > 0:
-                st.success(f"✅ Synchronisation terminée — {count_new} nouvelle(s) activité(s) ajoutée(s).")
-            else:
-                st.info("✅ Déjà à jour, aucune nouvelle activité.")
-        except ValueError as exc:
-            st.error(f"⚠️ Configuration : {exc}")
-            st.stop()
-        except Exception as exc:
-            st.error(f"❌ Erreur Garmin Connect : {exc}")
-            st.stop()
-
-st.divider()
-
-# ── KPIs ──────────────────────────────────────────────────────────────────────
+# ── Chargement des comptes ────────────────────────────────────────────────────
 try:
-    summary = get_sync_summary()
+    accounts = get_accounts()
 except Exception as exc:
     st.error(f"❌ Impossible de se connecter à Supabase : {exc}")
-    st.info("Vérifie que SUPABASE_URL et SUPABASE_KEY sont bien configurées dans les Secrets Streamlit Cloud.")
+    st.info("Vérifiez que SUPABASE_URL et SUPABASE_KEY sont configurées dans les Secrets Streamlit Cloud.")
     st.stop()
 
-col1, col2 = st.columns(2)
-col1.metric("Dernière synchro", summary["last_sync"])
-col2.metric("Activités totales", summary["total_activities"])
+# ── Liste des comptes configurés ──────────────────────────────────────────────
+st.subheader("Comptes Garmin")
 
-col3, col4, col5 = st.columns(3)
-col3.metric("Distance totale", f"{summary['total_distance_km']:,.0f} km")
-col4.metric("Dénivelé total", f"{summary['total_elevation_m']:,} m D+")
-col5.metric("Durée totale", f"{summary['total_duration_h']:.0f} h")
+if not accounts:
+    st.info("Aucun compte configuré. Ajoutez un compte ci-dessous.")
+else:
+    for i, account in enumerate(accounts):
+        label = account.get("label") or account["email"]
+        last_sync = get_last_sync(account["email"])
+
+        with st.container(border=True):
+            col_info, col_sync, col_del = st.columns([5, 2, 1])
+
+            with col_info:
+                st.markdown(f"**{label}**")
+                st.caption(f"{account['email']} — Dernière synchro : {last_sync}")
+
+            with col_sync:
+                if st.button("🔄 Synchroniser", key=f"sync_{i}", use_container_width=True):
+                    with st.spinner(f"Connexion à {account['email']}…"):
+                        try:
+                            activities = fetch_activities(account["email"], account["password"])
+                            count_new = save_activities(activities, garmin_account=account["email"])
+                            if count_new > 0:
+                                st.success(f"✅ {count_new} nouvelle(s) activité(s) ajoutée(s).")
+                            else:
+                                st.info("✅ Déjà à jour, aucune nouvelle activité.")
+                            st.rerun()
+                        except ValueError as exc:
+                            st.error(f"⚠️ {exc}")
+                        except Exception as exc:
+                            st.error(f"❌ Erreur Garmin Connect : {exc}")
+
+            with col_del:
+                if st.button("🗑️", key=f"del_{i}", help="Retirer ce compte de la liste"):
+                    accounts.pop(i)
+                    save_accounts(accounts)
+                    st.rerun()
 
 st.divider()
-st.info("👈 Utilise le menu de gauche pour accéder aux pages Running et Tendances.")
+
+# ── Ajouter un compte ─────────────────────────────────────────────────────────
+with st.expander("➕ Ajouter un compte Garmin", expanded=not accounts):
+    with st.form("add_account"):
+        col_l, col_e, col_p = st.columns(3)
+        with col_l:
+            label = st.text_input("Label (optionnel)", placeholder="Ex : William, Compte perso…")
+        with col_e:
+            email = st.text_input("Email Garmin Connect")
+        with col_p:
+            password = st.text_input("Mot de passe", type="password")
+        submitted = st.form_submit_button("💾 Enregistrer le compte", use_container_width=True)
+
+    if submitted:
+        if not email or not password:
+            st.error("Email et mot de passe sont requis.")
+        elif any(a["email"] == email for a in accounts):
+            st.warning("Ce compte est déjà configuré.")
+        else:
+            accounts.append({
+                "email": email,
+                "password": password,
+                "label": label.strip() or email,
+            })
+            save_accounts(accounts)
+            st.success(f"✅ Compte **{email}** ajouté. Vous pouvez maintenant synchroniser.")
+            st.rerun()
+
+st.divider()
+st.info("👈 Utilisez le menu de gauche pour accéder aux statistiques, activités et tendances.")
