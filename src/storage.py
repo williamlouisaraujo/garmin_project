@@ -1,115 +1,61 @@
-import sqlite3
-from contextlib import contextmanager
+from __future__ import annotations
+
 from datetime import datetime
-from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 
-DB_PATH = Path(__file__).parent.parent / "garmin.db"
-
-
-@contextmanager
-def _conn():
-    con = sqlite3.connect(DB_PATH)
-    con.row_factory = sqlite3.Row
-    try:
-        yield con
-        con.commit()
-    finally:
-        con.close()
-
-
-def init_db() -> None:
-    with _conn() as con:
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS activities (
-                activity_id   TEXT PRIMARY KEY,
-                name          TEXT,
-                type          TEXT,
-                start_time    TEXT,
-                distance_km   REAL,
-                duration_min  REAL,
-                elevation_m   REAL,
-                avg_hr        INTEGER,
-                max_hr        INTEGER,
-                pace_min_km   REAL,
-                calories      INTEGER
-            )
-        """)
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS sync_log (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                synced_at   TEXT NOT NULL,
-                count_new   INTEGER NOT NULL DEFAULT 0
-            )
-        """)
+from src.db import get_supabase
 
 
 def save_activities(raw_list: list[dict]) -> int:
-    """Insert new activities, skip duplicates. Returns count of inserted rows."""
+    """Insère les nouvelles activités, ignore les doublons. Retourne le nombre d'insérées."""
     from src.transform import normalize_activity
 
-    init_db()
-    count_new = 0
+    db = get_supabase()
 
-    with _conn() as con:
-        for raw in raw_list:
-            row = normalize_activity(raw)
-            if row is None:
-                continue
-            exists = con.execute(
-                "SELECT 1 FROM activities WHERE activity_id = ?", (row["activity_id"],)
-            ).fetchone()
-            if exists:
-                continue
-            con.execute(
-                """INSERT INTO activities
-                   (activity_id, name, type, start_time, distance_km, duration_min,
-                    elevation_m, avg_hr, max_hr, pace_min_km, calories)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    row["activity_id"], row["name"], row["type"], row["start_time"],
-                    row["distance_km"], row["duration_min"], row["elevation_m"],
-                    row["avg_hr"], row["max_hr"], row["pace_min_km"], row["calories"],
-                ),
-            )
-            count_new += 1
+    existing = db.table("activities").select("activity_id").execute()
+    existing_ids = {row["activity_id"] for row in existing.data}
 
-        con.execute(
-            "INSERT INTO sync_log (synced_at, count_new) VALUES (?, ?)",
-            (datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), count_new),
-        )
+    new_rows = []
+    for raw in raw_list:
+        row = normalize_activity(raw)
+        if row is None or row["activity_id"] in existing_ids:
+            continue
+        new_rows.append(row)
 
-    return count_new
+    if new_rows:
+        db.table("activities").insert(new_rows).execute()
+
+    db.table("sync_log").insert({
+        "synced_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        "count_new": len(new_rows),
+    }).execute()
+
+    return len(new_rows)
 
 
 def get_activities_df() -> pd.DataFrame:
-    init_db()
-    with _conn() as con:
-        rows = con.execute(
-            "SELECT * FROM activities ORDER BY start_time DESC"
-        ).fetchall()
-    if not rows:
+    db = get_supabase()
+    response = db.table("activities").select("*").order("start_time", desc=True).execute()
+    if not response.data:
         return pd.DataFrame()
-    return pd.DataFrame([dict(r) for r in rows])
+    return pd.DataFrame(response.data)
 
 
 def get_sync_summary() -> dict:
-    init_db()
-    with _conn() as con:
-        last_row = con.execute(
-            "SELECT synced_at FROM sync_log ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        count_row = con.execute("SELECT COUNT(*) FROM activities").fetchone()
+    db = get_supabase()
 
-    last_sync = last_row[0] if last_row else "Jamais"
-    total_activities = count_row[0] if count_row else 0
+    last_row = (
+        db.table("sync_log").select("synced_at").order("id", desc=True).limit(1).execute()
+    )
+    last_sync = last_row.data[0]["synced_at"] if last_row.data else "Jamais"
 
     df = get_activities_df()
     if df.empty:
         return {
             "last_sync": last_sync,
-            "total_activities": total_activities,
+            "total_activities": 0,
             "total_distance_km": 0.0,
             "total_elevation_m": 0,
             "total_duration_h": 0.0,
@@ -117,8 +63,21 @@ def get_sync_summary() -> dict:
 
     return {
         "last_sync": last_sync,
-        "total_activities": total_activities,
+        "total_activities": len(df),
         "total_distance_km": round(df["distance_km"].sum(), 1),
         "total_elevation_m": int(df["elevation_m"].sum()),
         "total_duration_h": round(df["duration_min"].sum() / 60, 1),
     }
+
+
+def get_setting(key: str) -> Optional[str]:
+    db = get_supabase()
+    response = db.table("settings").select("value").eq("key", key).execute()
+    if response.data:
+        return response.data[0]["value"]
+    return None
+
+
+def save_setting(key: str, value: str) -> None:
+    db = get_supabase()
+    db.table("settings").upsert({"key": key, "value": value}).execute()
