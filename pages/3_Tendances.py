@@ -2,20 +2,36 @@ import streamlit as st
 
 from src.auth import require_password
 from src.charts import weekly_count_chart, weekly_distance_chart, weekly_elevation_chart
-from src.storage import get_activities_df
+from src.storage import get_accounts, get_activities_df
 from src.transform import weekly_aggregation
 
-st.set_page_config(page_title="Tendances", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Tendances", page_icon="📈", layout="wide")
 require_password()
 
-st.title("📊 Tendances")
+st.title("📈 Tendances")
 st.caption("Évolution hebdomadaire de tes activités")
 
-df = get_activities_df()
-
-if df.empty:
-    st.info("Aucune activité. Synchronise depuis la page Accueil.")
+# ── Chargement ────────────────────────────────────────────────────────────────
+try:
+    df_all = get_activities_df()
+    accounts = get_accounts()
+except Exception as exc:
+    st.error(f"❌ Impossible de se connecter à Supabase : {exc}")
     st.stop()
+
+if df_all.empty:
+    st.info("Aucune activité. Synchronise depuis la page Connexion.")
+    st.stop()
+
+# ── Filtre compte ─────────────────────────────────────────────────────────────
+df = df_all
+if len(accounts) > 1:
+    account_labels = {a["email"]: a.get("label", a["email"]) for a in accounts}
+    options = ["Tous les comptes"] + list(account_labels.values())
+    choix = st.selectbox("Compte", options)
+    if choix != "Tous les comptes":
+        selected_email = next(e for e, l in account_labels.items() if l == choix)
+        df = df_all[df_all["garmin_account"] == selected_email]
 
 weekly = weekly_aggregation(df)
 
@@ -30,10 +46,8 @@ fig_count = weekly_count_chart(weekly_display)
 
 if fig_dist:
     st.plotly_chart(fig_dist, use_container_width=True)
-
 if fig_elev:
     st.plotly_chart(fig_elev, use_container_width=True)
-
 if fig_count:
     st.plotly_chart(fig_count, use_container_width=True)
 

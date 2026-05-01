@@ -5,24 +5,26 @@
 
 -- Activités Garmin
 CREATE TABLE IF NOT EXISTS activities (
-    activity_id   TEXT PRIMARY KEY,
-    name          TEXT,
-    type          TEXT,
-    start_time    TEXT,
-    distance_km   FLOAT,
-    duration_min  FLOAT,
-    elevation_m   FLOAT,
-    avg_hr        INTEGER,
-    max_hr        INTEGER,
-    pace_min_km   FLOAT,
-    calories      INTEGER
+    activity_id     TEXT PRIMARY KEY,
+    name            TEXT,
+    type            TEXT,
+    start_time      TEXT,
+    distance_km     FLOAT,
+    duration_min    FLOAT,
+    elevation_m     FLOAT,
+    avg_hr          INTEGER,
+    max_hr          INTEGER,
+    pace_min_km     FLOAT,
+    calories        INTEGER,
+    garmin_account  TEXT NOT NULL DEFAULT ''
 );
 
 -- Log des synchronisations
 CREATE TABLE IF NOT EXISTS sync_log (
-    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    synced_at   TEXT NOT NULL,
-    count_new   INTEGER NOT NULL DEFAULT 0
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    synced_at       TEXT NOT NULL,
+    count_new       INTEGER NOT NULL DEFAULT 0,
+    garmin_account  TEXT NOT NULL DEFAULT ''
 );
 
 -- Paramètres de l'application (credentials Garmin, etc.)

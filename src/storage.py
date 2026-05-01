@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Optional
 
@@ -8,8 +9,30 @@ import pandas as pd
 from src.db import get_supabase
 
 
-def save_activities(raw_list: list[dict]) -> int:
-    """Insère les nouvelles activités, ignore les doublons. Retourne le nombre d'insérées."""
+def get_accounts() -> list[dict]:
+    """Retourne la liste des comptes Garmin configurés."""
+    db = get_supabase()
+    response = db.table("settings").select("value").eq("key", "garmin_accounts").execute()
+    if response.data:
+        try:
+            return json.loads(response.data[0]["value"])
+        except (json.JSONDecodeError, KeyError):
+            pass
+    # Rétrocompatibilité : compte unique stocké avec les anciennes clés
+    email = get_setting("garmin_email")
+    password = get_setting("garmin_password")
+    if email and password:
+        return [{"email": email, "password": password, "label": email}]
+    return []
+
+
+def save_accounts(accounts: list[dict]) -> None:
+    db = get_supabase()
+    db.table("settings").upsert({"key": "garmin_accounts", "value": json.dumps(accounts)}).execute()
+
+
+def save_activities(raw_list: list[dict], garmin_account: str = "") -> int:
+    """Insère les nouvelles activités pour un compte donné. Retourne le nombre d'insérées."""
     from src.transform import normalize_activity
 
     db = get_supabase()
@@ -22,6 +45,7 @@ def save_activities(raw_list: list[dict]) -> int:
         row = normalize_activity(raw)
         if row is None or row["activity_id"] in existing_ids:
             continue
+        row["garmin_account"] = garmin_account
         new_rows.append(row)
 
     if new_rows:
@@ -30,44 +54,33 @@ def save_activities(raw_list: list[dict]) -> int:
     db.table("sync_log").insert({
         "synced_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
         "count_new": len(new_rows),
+        "garmin_account": garmin_account,
     }).execute()
 
     return len(new_rows)
 
 
-def get_activities_df() -> pd.DataFrame:
+def get_activities_df(garmin_account: Optional[str] = None) -> pd.DataFrame:
     db = get_supabase()
-    response = db.table("activities").select("*").order("start_time", desc=True).execute()
+    query = db.table("activities").select("*").order("start_time", desc=True)
+    if garmin_account:
+        query = query.eq("garmin_account", garmin_account)
+    response = query.execute()
     if not response.data:
         return pd.DataFrame()
-    return pd.DataFrame(response.data)
+    df = pd.DataFrame(response.data)
+    if "garmin_account" not in df.columns:
+        df["garmin_account"] = ""
+    return df
 
 
-def get_sync_summary() -> dict:
+def get_last_sync(garmin_account: Optional[str] = None) -> str:
     db = get_supabase()
-
-    last_row = (
-        db.table("sync_log").select("synced_at").order("id", desc=True).limit(1).execute()
-    )
-    last_sync = last_row.data[0]["synced_at"] if last_row.data else "Jamais"
-
-    df = get_activities_df()
-    if df.empty:
-        return {
-            "last_sync": last_sync,
-            "total_activities": 0,
-            "total_distance_km": 0.0,
-            "total_elevation_m": 0,
-            "total_duration_h": 0.0,
-        }
-
-    return {
-        "last_sync": last_sync,
-        "total_activities": len(df),
-        "total_distance_km": round(df["distance_km"].sum(), 1),
-        "total_elevation_m": int(df["elevation_m"].sum()),
-        "total_duration_h": round(df["duration_min"].sum() / 60, 1),
-    }
+    query = db.table("sync_log").select("synced_at").order("id", desc=True).limit(1)
+    if garmin_account:
+        query = query.eq("garmin_account", garmin_account)
+    row = query.execute()
+    return row.data[0]["synced_at"] if row.data else "Jamais"
 
 
 def get_setting(key: str) -> Optional[str]:
