@@ -1,0 +1,31 @@
+# Secrets — ne jamais committer
+.env
+.env.local
+.streamlit/secrets.toml
+
+# Base de données locale
+*.db
+*.sqlite
+data/
+
+# Token OAuth Garmin (généré par garminconnect)
+.garminconnect
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.python-version
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

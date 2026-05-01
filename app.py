@@ -1,44 +1,57 @@
 import streamlit as st
-from src.database import get_latest_sync_summary
 
-st.set_page_config(page_title="My Personal Garmin Dashboard", page_icon="🏃", layout="wide")
+from src.auth import require_password
+from src.garmin_client import fetch_activities
+from src.storage import get_sync_summary, save_activities
 
-
-def require_password() -> None:
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-
-    if st.session_state.authenticated:
-        return
-
-    with st.form("login"):
-        password = st.text_input("Mot de passe", type="password")
-        submitted = st.form_submit_button("Se connecter")
-
-    if submitted:
-        if password == st.secrets.get("APP_PASSWORD", ""):
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("Mot de passe incorrect")
-    st.stop()
-
+st.set_page_config(
+    page_title="Garmin Dashboard",
+    page_icon="🏃",
+    layout="wide",
+)
 
 require_password()
 
 st.title("🏠 Accueil")
-st.caption("Dashboard personnel Garmin + santé")
+st.caption("Dashboard personnel Garmin Connect")
 
-summary = get_latest_sync_summary()
+# ── Bouton synchronisation ────────────────────────────────────────────────────
+with st.container():
+    col_btn, col_info = st.columns([1, 3])
+    with col_btn:
+        sync = st.button("🔄 Synchroniser Garmin", use_container_width=True)
+    with col_info:
+        st.caption("Récupère les 200 dernières activités. Les activités déjà présentes sont ignorées.")
 
-col1, col2, col3 = st.columns(3)
+if sync:
+    with st.spinner("Connexion à Garmin Connect…"):
+        try:
+            activities = fetch_activities(limit=200)
+            count_new = save_activities(activities)
+            if count_new > 0:
+                st.success(f"✅ Synchronisation terminée — {count_new} nouvelle(s) activité(s) ajoutée(s).")
+            else:
+                st.info("✅ Déjà à jour, aucune nouvelle activité.")
+        except ValueError as exc:
+            st.error(f"⚠️ Configuration : {exc}")
+            st.stop()
+        except Exception as exc:
+            st.error(f"❌ Erreur Garmin Connect : {exc}")
+            st.stop()
+
+st.divider()
+
+# ── KPIs ──────────────────────────────────────────────────────────────────────
+summary = get_sync_summary()
+
+col1, col2 = st.columns(2)
 col1.metric("Dernière synchro", summary["last_sync"])
-col2.metric("KM semaine", f"{summary['weekly_km']:.1f} km")
-col3.metric("D+ semaine", f"{summary['weekly_elevation']} m")
+col2.metric("Activités totales", summary["total_activities"])
 
-col4, col5, col6 = st.columns(3)
-col4.metric("Sommeil", f"{summary['sleep_hours']:.1f} h")
-col5.metric("HRV", f"{summary['hrv']} ms")
-col6.metric("Fatigue estimée", summary["fatigue"])
+col3, col4, col5 = st.columns(3)
+col3.metric("Distance totale", f"{summary['total_distance_km']:,.0f} km")
+col4.metric("Dénivelé total", f"{summary['total_elevation_m']:,} m D+")
+col5.metric("Durée totale", f"{summary['total_duration_h']:.0f} h")
 
-st.info("Utilise le menu de gauche pour naviguer entre Running, Stats, Recovery, Training plan et Settings.")
+st.divider()
+st.info("👈 Utilise le menu de gauche pour accéder aux pages Running et Tendances.")
