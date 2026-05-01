@@ -42,7 +42,12 @@ if sync:
 st.divider()
 
 # ── KPIs ──────────────────────────────────────────────────────────────────────
-summary = get_sync_summary()
+try:
+    summary = get_sync_summary()
+except Exception as exc:
+    st.error(f"❌ Impossible de se connecter à Supabase : {exc}")
+    st.info("Vérifie que SUPABASE_URL et SUPABASE_KEY sont bien configurées dans les Secrets Streamlit Cloud.")
+    st.stop()
 
 col1, col2 = st.columns(2)
 col1.metric("Dernière synchro", summary["last_sync"])
