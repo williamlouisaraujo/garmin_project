@@ -1,4 +1,5 @@
 import streamlit as st
+from datetime import date as _date
 from garminconnect import Garmin, GarminConnectAuthenticationError
 
 
@@ -44,3 +45,49 @@ def fetch_all_activities(
         start += to_fetch
 
     return all_activities
+
+
+def _safe_call(fn, *args, **kwargs):
+    """Appelle fn et retourne None en cas d'erreur."""
+    try:
+        return fn(*args, **kwargs)
+    except Exception:
+        return None
+
+
+def get_vo2max_data(email: str, password: str, cdate: str | None = None) -> dict | None:
+    """VO2max et métriques de forme via get_max_metrics()."""
+    client = _get_client(email, password)
+    cdate = cdate or _date.today().isoformat()
+    return _safe_call(client.get_max_metrics, cdate)
+
+
+def get_lactate_threshold_data(email: str, password: str) -> dict | None:
+    """Seuil lactique natif Garmin (dernier connu)."""
+    client = _get_client(email, password)
+    return _safe_call(client.get_lactate_threshold, latest=True)
+
+
+def get_user_profile_data(email: str, password: str) -> dict | None:
+    """Paramètres utilisateur (FCmax, FC repos, âge…)."""
+    client = _get_client(email, password)
+    return _safe_call(client.get_userprofile_settings)
+
+
+def get_training_readiness_data(email: str, password: str, cdate: str | None = None) -> dict | None:
+    """Score de forme du jour."""
+    client = _get_client(email, password)
+    cdate = cdate or _date.today().isoformat()
+    return _safe_call(client.get_training_readiness, cdate)
+
+
+def get_personal_records_native(email: str, password: str) -> list | dict | None:
+    """Records personnels natifs Garmin Connect."""
+    client = _get_client(email, password)
+    return _safe_call(client.get_personal_record)
+
+
+def get_race_predictions_native(email: str, password: str) -> dict | list | None:
+    """Prédictions de course natives Garmin Connect (dernières en date)."""
+    client = _get_client(email, password)
+    return _safe_call(client.get_race_predictions)
