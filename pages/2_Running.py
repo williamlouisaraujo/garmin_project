@@ -3,13 +3,12 @@ import streamlit as st
 
 from src.auth import require_password
 from src.storage import get_accounts, get_activities_df
-from src.transform import format_duration, format_pace
+from src.transform import compute_vap, format_duration, format_pace
 
-st.set_page_config(page_title="Running", page_icon="🏃", layout="wide")
+st.set_page_config(page_title="Historique des activités", page_icon="📋", layout="wide")
 require_password()
 
-st.title("🏃 Running")
-st.caption("Historique de tes activités")
+st.title("📋 Historique des activités")
 
 # ── Chargement ────────────────────────────────────────────────────────────────
 try:
@@ -26,7 +25,8 @@ if df.empty:
 df["start_time"] = pd.to_datetime(df["start_time"])
 
 # ── Filtres ───────────────────────────────────────────────────────────────────
-filter_cols = st.columns(3) if len(accounts) > 1 else st.columns(2)
+ncols = 3 if len(accounts) > 1 else 2
+filter_cols = st.columns(ncols)
 
 with filter_cols[0]:
     types_dispo = sorted(df["type"].dropna().unique().tolist())
@@ -40,11 +40,10 @@ with filter_cols[1]:
 selected_account = None
 if len(accounts) > 1:
     account_labels = {a["email"]: a.get("label", a["email"]) for a in accounts}
-    options = ["Tous les comptes"] + list(account_labels.values())
     with filter_cols[2]:
-        choix = st.selectbox("Compte", options)
-    if choix != "Tous les comptes":
-        selected_account = next(e for e, l in account_labels.items() if l == choix)
+        choix = st.selectbox("Utilisateur", ["Tous"] + list(account_labels.values()))
+    if choix != "Tous":
+        selected_account = next(e for e, lbl in account_labels.items() if lbl == choix)
 
 # ── Application des filtres ───────────────────────────────────────────────────
 mask = df["type"].isin(types_choisis)
@@ -57,15 +56,19 @@ if selected_account:
 df_f = df[mask].copy()
 st.caption(f"**{len(df_f)} activité(s)**")
 
-# ── Tableau ───────────────────────────────────────────────────────────────────
+# ── Construction du tableau ───────────────────────────────────────────────────
 display = df_f[
     ["start_time", "name", "type", "distance_km", "duration_min",
-     "pace_min_km", "elevation_m", "avg_hr", "calories"]
+     "pace_min_km", "elevation_m", "avg_hr", "calories", "garmin_account"]
 ].copy()
 
 display["Date"] = display["start_time"].dt.strftime("%d/%m/%Y")
 display["Durée"] = display["duration_min"].apply(format_duration)
 display["Allure"] = display["pace_min_km"].apply(format_pace)
+display["VAP"] = display.apply(
+    lambda r: format_pace(compute_vap(r["pace_min_km"], r["elevation_m"], r["distance_km"])),
+    axis=1,
+)
 display["D+ (m)"] = display["elevation_m"].fillna(0).astype(int)
 display["FC moy"] = display["avg_hr"].where(display["avg_hr"].notna() & (display["avg_hr"] > 0))
 
@@ -76,12 +79,12 @@ display = display.rename(columns={
     "calories": "Cal",
 })
 
-colonnes = ["Date", "Activité", "Type", "Dist. (km)", "Durée", "Allure", "D+ (m)", "FC moy", "Cal"]
+colonnes = ["Date", "Activité", "Type", "Dist. (km)", "Durée", "Allure", "VAP", "D+ (m)", "FC moy", "Cal"]
 
 if len(accounts) > 1 and selected_account is None:
     account_labels = {a["email"]: a.get("label", a["email"]) for a in accounts}
-    display["Compte"] = df_f["garmin_account"].map(account_labels).fillna(df_f["garmin_account"])
-    colonnes = ["Compte"] + colonnes
+    display["Utilisateur"] = df_f["garmin_account"].map(account_labels).fillna(df_f["garmin_account"])
+    colonnes = ["Utilisateur"] + colonnes
 
 st.dataframe(
     display[colonnes],
@@ -91,5 +94,6 @@ st.dataframe(
         "Dist. (km)": st.column_config.NumberColumn(format="%.2f km"),
         "FC moy": st.column_config.NumberColumn(format="%d bpm"),
         "Cal": st.column_config.NumberColumn(format="%d kcal"),
+        "D+ (m)": st.column_config.NumberColumn(format="%d m"),
     },
 )

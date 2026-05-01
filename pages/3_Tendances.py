@@ -28,15 +28,15 @@ df = df_all
 if len(accounts) > 1:
     account_labels = {a["email"]: a.get("label", a["email"]) for a in accounts}
     options = ["Tous les comptes"] + list(account_labels.values())
-    choix = st.selectbox("Compte", options)
+    choix = st.selectbox("Utilisateur", options)
     if choix != "Tous les comptes":
-        selected_email = next(e for e, l in account_labels.items() if l == choix)
+        selected_email = next(e for e, lbl in account_labels.items() if lbl == choix)
         df = df_all[df_all["garmin_account"] == selected_email]
 
 weekly = weekly_aggregation(df)
 
 # ── Filtre semaines ───────────────────────────────────────────────────────────
-n_semaines = st.slider("Nombre de semaines à afficher", min_value=4, max_value=52, value=12, step=4)
+n_semaines = st.slider("Nombre de semaines à afficher", min_value=4, max_value=min(52, len(weekly)), value=min(12, len(weekly)), step=4)
 weekly_display = weekly.tail(n_semaines)
 
 # ── Graphiques ────────────────────────────────────────────────────────────────
