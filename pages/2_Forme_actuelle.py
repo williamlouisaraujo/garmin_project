@@ -11,6 +11,7 @@ from src.garmin_client import (
     get_training_readiness_data,
     get_user_profile_data,
     get_vo2max_data,
+    get_vo2max_data_last_days,
 )
 from src.storage import get_accounts, get_activities_df
 from src.transform import format_pace
@@ -75,6 +76,14 @@ def _extract_vo2max(data) -> float | None:
     return None
 
 
+def _extract_vo2max_from_history(entries: list[dict]) -> float | None:
+    for item in entries:
+        value = _extract_vo2max(item)
+        if value:
+            return value
+    return None
+
+
 def _extract_lt(data) -> tuple[int | None, float | None]:
     """Retourne (FC_seuil, allure_seuil_min_km)."""
     if not data:
@@ -112,6 +121,8 @@ def _extract_readiness(data) -> int | None:
 # ── Calculs ───────────────────────────────────────────────────────────────────
 
 vo2max = _extract_vo2max(vo2max_raw)
+if vo2max is None:
+    vo2max = _extract_vo2max_from_history(get_vo2max_data_last_days(email, password, days=30))
 lt_hr, lt_pace = _extract_lt(lt_raw)
 fcmax_garmin = _extract_fcmax(profile_raw)
 readiness = _extract_readiness(readiness_raw)

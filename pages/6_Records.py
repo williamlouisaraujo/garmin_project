@@ -46,6 +46,14 @@ _GARMIN_PR_DIST: dict[str, float] = {
     "fastest10k": 10.0,
     "fastestHalfMarathon": 21.0975,
     "fastestMarathon": 42.195,
+    "fastest_500m": 0.5,
+    "Best500m": 0.5,
+    "fastest_30K": 30.0,
+    "Best30K": 30.0,
+    "fastest_50K": 50.0,
+    "Best50K": 50.0,
+    "fastest_100K": 100.0,
+    "Best100K": 100.0,
 }
 
 # Mapping prédictions Garmin → distance km
@@ -189,6 +197,17 @@ if selected_acc:
         pred_raw = get_race_predictions_native(selected_acc["email"], selected_acc["password"])
     garmin_prs = _parse_garmin_prs(pr_raw)
     garmin_preds = _parse_garmin_predictions(pred_raw)
+elif accounts:
+    with st.spinner("Agrégation des records Garmin multi-comptes…"):
+        for acc in accounts:
+            pr_raw = get_personal_records_native(acc["email"], acc["password"])
+            pred_raw = get_race_predictions_native(acc["email"], acc["password"])
+            for dist, rec in _parse_garmin_prs(pr_raw).items():
+                if dist not in garmin_prs or rec["time_s"] < garmin_prs[dist]["time_s"]:
+                    garmin_prs[dist] = rec
+            for dist, pred in _parse_garmin_predictions(pred_raw).items():
+                if dist not in garmin_preds or pred < garmin_preds[dist]:
+                    garmin_preds[dist] = pred
 
 # ── Référence pour Riegel (fallback) ─────────────────────────────────────────
 # Trouver le meilleur PR connu (Garmin ou activités) pour les prédictions Riegel
@@ -258,29 +277,3 @@ if not garmin_prs:
     st.caption("ℹ️ Aucun record Garmin natif disponible — affichage des meilleures activités à distance équivalente.")
 if not garmin_preds:
     st.caption("ℹ️ Aucune prédiction Garmin native disponible — prédictions calculées via formule de Riegel.")
-
-# ── Données brutes debug ──────────────────────────────────────────────────────
-with st.expander("🔍 Données brutes Garmin (diagnostic)", expanded=False):
-    st.write("**Records natifs**")
-    st.json(pr_raw)
-    st.write("**Prédictions natives**")
-    st.json(pred_raw)
-
-# ── Comparaison multi-comptes ─────────────────────────────────────────────────
-if len(accounts) > 1 and selected_acc is None:
-    st.divider()
-    st.subheader("Comparaison entre utilisateurs")
-    comp_rows: list[dict] = []
-    for label, dist_km, low, high in TARGETS:
-        row: dict = {"Distance": label}
-        for acc in accounts:
-            acc_lbl = account_labels.get(acc["email"], acc["email"])
-            acc_df = df_all[df_all["garmin_account"] == acc["email"]]
-            best = best_activity_for_distance(acc_df, low, high)
-            if best:
-                t_s = int(best["duration_min"] * 60 * dist_km / best["distance_km"])
-                row[acc_lbl] = format_duration_hms(t_s)
-            else:
-                row[acc_lbl] = "—"
-        comp_rows.append(row)
-    st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)

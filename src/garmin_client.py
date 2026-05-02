@@ -51,7 +51,8 @@ def _safe_call(fn, *args, **kwargs):
     """Appelle fn et retourne None en cas d'erreur."""
     try:
         return fn(*args, **kwargs)
-    except Exception:
+    except Exception as exc:
+        st.warning(f"⚠️ Appel Garmin échoué ({getattr(fn, '__name__', 'unknown')}): {exc}")
         return None
 
 
@@ -60,6 +61,18 @@ def get_vo2max_data(email: str, password: str, cdate: str | None = None) -> dict
     client = _get_client(email, password)
     cdate = cdate or _date.today().isoformat()
     return _safe_call(client.get_max_metrics, cdate)
+
+
+def get_vo2max_data_last_days(email: str, password: str, days: int = 30) -> list[dict]:
+    """Retourne les métriques max des derniers jours (du plus récent au plus ancien)."""
+    client = _get_client(email, password)
+    out: list[dict] = []
+    for i in range(days):
+        d = (_date.today()).fromordinal(_date.today().toordinal() - i).isoformat()
+        data = _safe_call(client.get_max_metrics, d)
+        if data:
+            out.append(data)
+    return out
 
 
 def get_lactate_threshold_data(email: str, password: str) -> dict | None:
