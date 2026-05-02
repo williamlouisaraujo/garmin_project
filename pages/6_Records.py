@@ -64,8 +64,10 @@ _GARMIN_PRED_DIST: dict[str, float] = {
     "marathon": 42.195, "Marathon": 42.195,
 }
 
+
 def _norm_key(value: str) -> str:
     return str(value or "").replace("_", "").replace("-", "").replace(" ", "").lower()
+
 
 def riegel(t1_s: float, d1_km: float, d2_km: float) -> int:
     return int(t1_s * (d2_km / d1_km) ** 1.06)
@@ -89,6 +91,7 @@ def _parse_pr_time_s(value) -> float | None:
         return v if v > 0 else None
     except (TypeError, ValueError):
         return None
+
 
 def _parse_garmin_prs(raw) -> dict[float, dict]:
     """Extrait les PRs Garmin et les mappe sur une distance en km."""
@@ -249,7 +252,26 @@ for label, dist_km, low, high in TARGETS:
         pr_pace = format_pace(garmin_pr["time_s"] / 60 / dist_km)
         pr_date = garmin_pr.get("date", "—")
         pr_source = "Garmin ✅"
-@@ -237,50 +275,53 @@ for label, dist_km, low, high in TARGETS:
+    else:
+        best_act = best_activity_for_distance(selected_df, low, high)
+        if best_act:
+            t_s = int(best_act["duration_min"] * 60 * dist_km / best_act["distance_km"])
+            pr_str = format_duration_hms(t_s)
+            pr_pace = format_pace(t_s / 60 / dist_km)
+            pr_date = pd.to_datetime(best_act["start_time"]).strftime("%d/%m/%Y") if best_act.get("start_time") else "—"
+            pr_source = "Activités ⚙️"
+        else:
+            pr_str = pr_pace = pr_date = "—"
+            pr_source = "—"
+
+    # Prédiction natif Garmin
+    garmin_pred_s = garmin_preds.get(dist_km)
+    if garmin_pred_s:
+        pred_str = format_duration_hms(garmin_pred_s)
+        pred_pace = format_pace(garmin_pred_s / 60 / dist_km)
+        pred_source = "Garmin ✅"
+    elif ref_dist_km and ref_time_s:
+        riegel_s = riegel(ref_time_s, ref_dist_km, dist_km)
         pred_str = format_duration_hms(riegel_s)
         pred_pace = format_pace(riegel_s / 60 / dist_km)
         pred_source = "Riegel ⚙️"

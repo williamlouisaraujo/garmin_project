@@ -51,8 +51,8 @@ def _safe_call(fn, *args, **kwargs):
     """Appelle fn et retourne None en cas d'erreur."""
     try:
         return fn(*args, **kwargs)
-        except Exception as exc:
-        st.warning(f"⚠️ Appel Garmin échoué ({getattr(fn, '__name__', 'unknown')}): {exc}")
+    except Exception as exc:
+        st.warning(f"Garmin API call failed ({getattr(fn, '__name__', 'unknown')}): {exc}")
         return None
 
 
@@ -98,3 +98,9 @@ def get_personal_records_native(email: str, password: str) -> list | dict | None
     """Records personnels natifs Garmin Connect."""
     client = _get_client(email, password)
     return _safe_call(client.get_personal_record)
+
+
+def get_race_predictions_native(email: str, password: str) -> dict | list | None:
+    """Prédictions de course natives Garmin Connect (dernières en date)."""
+    client = _get_client(email, password)
+    return _safe_call(client.get_race_predictions)

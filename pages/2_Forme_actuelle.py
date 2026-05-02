@@ -37,7 +37,20 @@ if len(accounts) > 1:
     choix = st.selectbox("Compte", list(account_labels.values()))
     selected = next(a for a in accounts if a.get("label", a["email"]) == choix)
 else:
-@@ -53,87 +54,112 @@ with st.spinner("Récupération des données Garmin Connect…"):
+    selected = accounts[0]
+
+email, password = selected["email"], selected["password"]
+today = date.today().isoformat()
+
+# ── Chargement données Garmin ─────────────────────────────────────────────────
+with st.spinner("Récupération des données Garmin Connect…"):
+    vo2max_raw = get_vo2max_data(email, password, today)
+    lt_raw = get_lactate_threshold_data(email, password)
+    profile_raw = get_user_profile_data(email, password)
+    readiness_raw = get_training_readiness_data(email, password, today)
+    df_act = get_activities_df(garmin_account=email)
+
+
 # ── Parseurs robustes ─────────────────────────────────────────────────────────
 
 def _extract_vo2max(data) -> float | None:
