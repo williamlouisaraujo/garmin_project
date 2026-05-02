@@ -58,9 +58,12 @@ def _extract_vo2max(data) -> float | None:
         return None
     if isinstance(data, list):
         for item in data:
+            generic = item.get("generic", {}) if isinstance(item, dict) else {}
             for k in ("vo2MaxPreciseValue", "vo2MaxValue", "value"):
                 if item.get(k):
                     return float(item[k])
+                if isinstance(generic, dict) and generic.get(k):
+                    return float(generic[k])
     if isinstance(data, dict):
         # Format metricsMap
         metrics = data.get("allMetrics", {}).get("metricsMap", {})
@@ -104,11 +107,24 @@ def _extract_lt(data) -> tuple[int | None, float | None]:
     except (TypeError, ValueError):
         speed_mps = None
 
-    # Garmin peut renvoyer m/s ou km/h selon endpoint/profil
+
+    pace = None
     if speed_mps and speed_mps > 0:
-        pace = round(1000 / (speed_mps * 60), 3) if speed_mps <= 12 else round(60 / speed_mps, 3)
-    else:
-        pace = None
+        # Garmin peut renvoyer des unités différentes selon endpoint/profil.
+        # On teste plusieurs interprétations et on prend la première allure plausible.
+        pace_candidates = [
+            speed_mps and round(1000 / (speed_mps * 60), 3),  # m/s
+            speed_mps and round(60 / speed_mps, 3),  # km/h
+            speed_mps and round(1 / speed_mps, 3),  # km/min
+            speed_mps and round(1000 / ((speed_mps * 10) * 60), 3),  # m/s * 10
+        ]
+        for candidate in pace_candidates:
+            if candidate and 2.2 <= candidate <= 10:
+                pace = candidate
+                break
+        if pace is None:
+            pace = pace_candidates[0]
+
     return (int(hr) if hr else None), pace
 
 
