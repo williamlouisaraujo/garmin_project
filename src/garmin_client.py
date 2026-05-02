@@ -14,10 +14,24 @@ def _get_client(email: str, password: str) -> Garmin:
         raise ValueError(f"Identifiants incorrects pour {email} : {exc}") from exc
 
 
+_RUN_TYPES = frozenset({"running", "trail_running"})
+
+
+def _activity_type_key(activity: dict) -> str:
+    t = activity.get("activityType", {})
+    return (t.get("typeKey") if isinstance(t, dict) else str(t or "")).lower()
+
+
+def _filter_running(activities: list[dict]) -> list[dict]:
+    return [a for a in activities if _activity_type_key(a) in _RUN_TYPES]
+
+
 def fetch_activities(email: str, password: str, limit: int = 200) -> list[dict]:
-    """Récupère les <limit> dernières activités (une seule requête)."""
+    """Récupère les <limit> dernières activités running/trail_running."""
     client = _get_client(email, password)
-    return client.get_activities(0, limit)
+    # On sur-fetch pour compenser le filtre (ratio conservateur 3×)
+    raw = client.get_activities(0, min(limit * 3, 1000))
+    return _filter_running(raw)[:limit]
 
 
 def fetch_all_activities(
@@ -27,7 +41,7 @@ def fetch_all_activities(
     max_activities: int = 10_000,
     progress_callback=None,
 ) -> list[dict]:
-    """Récupère tout l'historique par pagination (batches de <batch_size>)."""
+    """Récupère tout l'historique running/trail_running par pagination."""
     client = _get_client(email, password)
     all_activities: list[dict] = []
     start = 0
@@ -37,7 +51,7 @@ def fetch_all_activities(
         batch = client.get_activities(start, to_fetch)
         if not batch:
             break
-        all_activities.extend(batch)
+        all_activities.extend(_filter_running(batch))
         if progress_callback:
             progress_callback(len(all_activities))
         if len(batch) < to_fetch:
