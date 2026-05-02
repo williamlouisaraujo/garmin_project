@@ -76,6 +76,24 @@ def get_vo2max_data(email: str, password: str, cdate: str | None = None) -> dict
     return _safe_call(client.get_max_metrics, cdate)
 
 
+def get_vo2max_data_last_days(email: str, password: str, days: int = 30) -> list[dict]:
+    """
+    Historique VO2max des derniers jours (du plus récent au plus ancien).
+
+    Certains écrans appellent encore cette fonction ; on la garde pour
+    compatibilité et robustesse inter-versions.
+    """
+    client = _get_client(email, password)
+    days = max(1, int(days))
+    entries: list[dict] = []
+    for i in range(days):
+        d = _date.fromordinal(_date.today().toordinal() - i).isoformat()
+        metrics = _safe_call(client.get_max_metrics, d)
+        if metrics:
+            entries.append(metrics)
+    return entries
+
+
 def get_lactate_threshold_data(email: str, password: str) -> dict | None:
     """Seuil lactique natif Garmin (dernier connu)."""
     client = _get_client(email, password)
