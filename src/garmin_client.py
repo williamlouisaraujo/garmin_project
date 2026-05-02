@@ -3,6 +3,22 @@ from datetime import date as _date
 from garminconnect import Garmin, GarminConnectAuthenticationError
 
 
+_ALLOWED_ACTIVITY_TYPES = {"running", "trail_running"}
+
+
+def _extract_type_key(activity: dict) -> str:
+    activity_type = activity.get("activityType") if isinstance(activity, dict) else None
+    if isinstance(activity_type, dict):
+        return str(activity_type.get("typeKey") or "").strip().lower()
+    if isinstance(activity_type, str):
+        return activity_type.strip().lower()
+    return ""
+
+
+def _filter_allowed_activities(activities: list[dict]) -> list[dict]:
+    return [a for a in activities if _extract_type_key(a) in _ALLOWED_ACTIVITY_TYPES]
+
+
 @st.cache_resource(ttl=3600, show_spinner=False)
 def _get_client(email: str, password: str) -> Garmin:
     """Connexion Garmin Connect, mise en cache 1h par compte."""
@@ -17,7 +33,8 @@ def _get_client(email: str, password: str) -> Garmin:
 def fetch_activities(email: str, password: str, limit: int = 200) -> list[dict]:
     """Récupère les <limit> dernières activités (une seule requête)."""
     client = _get_client(email, password)
-    return client.get_activities(0, limit)
+    activities = client.get_activities(0, limit)
+    return _filter_allowed_activities(activities)
 
 
 def fetch_all_activities(
@@ -44,7 +61,7 @@ def fetch_all_activities(
             break
         start += to_fetch
 
-    return all_activities
+    return _filter_allowed_activities(all_activities)
 
 
 def _safe_call(fn, *args, **kwargs):
@@ -54,6 +71,7 @@ def _safe_call(fn, *args, **kwargs):
     except Exception as exc:
         st.warning(f"Garmin API call failed ({getattr(fn, '__name__', 'unknown')}): {exc}")
         return None
+
 
 
 def get_vo2max_data(email: str, password: str, cdate: str | None = None) -> dict | None:
