@@ -64,6 +64,8 @@ _GARMIN_PRED_DIST: dict[str, float] = {
     "marathon": 42.195, "Marathon": 42.195,
 }
 
+def _norm_key(value: str) -> str:
+    return str(value or "").replace("_", "").replace("-", "").replace(" ", "").lower()
 
 def riegel(t1_s: float, d1_km: float, d2_km: float) -> int:
     return int(t1_s * (d2_km / d1_km) ** 1.06)
@@ -88,7 +90,6 @@ def _parse_pr_time_s(value) -> float | None:
     except (TypeError, ValueError):
         return None
 
-
 def _parse_garmin_prs(raw) -> dict[float, dict]:
     """Extrait les PRs Garmin et les mappe sur une distance en km."""
     result: dict[float, dict] = {}
@@ -105,8 +106,18 @@ def _parse_garmin_prs(raw) -> dict[float, dict]:
     for item in items:
         if not isinstance(item, dict):
             continue
-        type_id = item.get("typeId") or item.get("type") or ""
+        type_id = item.get("typeId") or item.get("type") or item.get("recordType") or ""
         dist = _GARMIN_PR_DIST.get(type_id)
+        if dist is None:
+            norm_map = {_norm_key(k): v for k, v in _GARMIN_PR_DIST.items()}
+            dist = norm_map.get(_norm_key(type_id))
+        if dist is None:
+            raw_dist_m = item.get("distance") or item.get("recordDistance")
+            try:
+                if raw_dist_m is not None:
+                    dist = round(float(raw_dist_m) / 1000.0, 4)
+            except (TypeError, ValueError):
+                dist = None
         if dist is None:
             continue
         # La valeur peut être en secondes, ms, ou autre
@@ -136,6 +147,8 @@ def _parse_garmin_predictions(raw) -> dict[float, int]:
         for k, v in container.items():
             dist = _GARMIN_PRED_DIST.get(k)
             if dist is None:
+                dist = {_norm_key(x): y for x, y in _GARMIN_PRED_DIST.items()}.get(_norm_key(k))
+            if dist is None:
                 continue
             # v peut être un float (secondes), un dict, ou autre
             if isinstance(v, (int, float)) and v > 0:
@@ -148,8 +161,10 @@ def _parse_garmin_predictions(raw) -> dict[float, int]:
         for item in container:
             if not isinstance(item, dict):
                 continue
-            event = item.get("event") or item.get("type") or ""
+            event = item.get("event") or item.get("type") or item.get("label") or ""
             dist = _GARMIN_PRED_DIST.get(event)
+            if dist is None:
+                dist = {_norm_key(x): y for x, y in _GARMIN_PRED_DIST.items()}.get(_norm_key(event))
             if dist is None:
                 continue
             t = item.get("timePrediction") or item.get("time") or item.get("value")
@@ -190,6 +205,7 @@ else:
 # ── Récupération données natives Garmin ───────────────────────────────────────
 garmin_prs: dict[float, dict] = {}
 garmin_preds: dict[float, int] = {}
+pr_raw, pred_raw = None, None
 
 if selected_acc:
     with st.spinner("Récupération des records et prédictions Garmin…"):
@@ -233,26 +249,7 @@ for label, dist_km, low, high in TARGETS:
         pr_pace = format_pace(garmin_pr["time_s"] / 60 / dist_km)
         pr_date = garmin_pr.get("date", "—")
         pr_source = "Garmin ✅"
-    else:
-        best_act = best_activity_for_distance(selected_df, low, high)
-        if best_act:
-            t_s = int(best_act["duration_min"] * 60 * dist_km / best_act["distance_km"])
-            pr_str = format_duration_hms(t_s)
-            pr_pace = format_pace(t_s / 60 / dist_km)
-            pr_date = pd.to_datetime(best_act["start_time"]).strftime("%d/%m/%Y") if best_act.get("start_time") else "—"
-            pr_source = "Activités ⚙️"
-        else:
-            pr_str = pr_pace = pr_date = "—"
-            pr_source = "—"
-
-    # Prédiction natif Garmin
-    garmin_pred_s = garmin_preds.get(dist_km)
-    if garmin_pred_s:
-        pred_str = format_duration_hms(garmin_pred_s)
-        pred_pace = format_pace(garmin_pred_s / 60 / dist_km)
-        pred_source = "Garmin ✅"
-    elif ref_dist_km and ref_time_s:
-        riegel_s = riegel(ref_time_s, ref_dist_km, dist_km)
+@@ -237,50 +275,53 @@ for label, dist_km, low, high in TARGETS:
         pred_str = format_duration_hms(riegel_s)
         pred_pace = format_pace(riegel_s / 60 / dist_km)
         pred_source = "Riegel ⚙️"
@@ -277,3 +274,32 @@ if not garmin_prs:
     st.caption("ℹ️ Aucun record Garmin natif disponible — affichage des meilleures activités à distance équivalente.")
 if not garmin_preds:
     st.caption("ℹ️ Aucune prédiction Garmin native disponible — prédictions calculées via formule de Riegel.")
+
+with st.expander("🔍 Debug records natifs", expanded=False):
+    st.json({"pr_raw": pr_raw if 'pr_raw' in locals() else None, "pred_raw": pred_raw if 'pred_raw' in locals() else None})
+
+# ── Données brutes debug ──────────────────────────────────────────────────────
+with st.expander("🔍 Données brutes Garmin (diagnostic)", expanded=False):
+    st.write("**Records natifs**")
+    st.json(pr_raw)
+    st.write("**Prédictions natives**")
+    st.json(pred_raw)
+
+# ── Comparaison multi-comptes ─────────────────────────────────────────────────
+if len(accounts) > 1 and selected_acc is None:
+    st.divider()
+    st.subheader("Comparaison entre utilisateurs")
+    comp_rows: list[dict] = []
+    for label, dist_km, low, high in TARGETS:
+        row: dict = {"Distance": label}
+        for acc in accounts:
+            acc_lbl = account_labels.get(acc["email"], acc["email"])
+            acc_df = df_all[df_all["garmin_account"] == acc["email"]]
+            best = best_activity_for_distance(acc_df, low, high)
+            if best:
+                t_s = int(best["duration_min"] * 60 * dist_km / best["distance_km"])
+                row[acc_lbl] = format_duration_hms(t_s)
+            else:
+                row[acc_lbl] = "—"
+        comp_rows.append(row)
+    st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)

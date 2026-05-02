@@ -37,20 +37,7 @@ if len(accounts) > 1:
     choix = st.selectbox("Compte", list(account_labels.values()))
     selected = next(a for a in accounts if a.get("label", a["email"]) == choix)
 else:
-    selected = accounts[0]
-
-email, password = selected["email"], selected["password"]
-today = date.today().isoformat()
-
-# ── Chargement données Garmin ─────────────────────────────────────────────────
-with st.spinner("Récupération des données Garmin Connect…"):
-    vo2max_raw = get_vo2max_data(email, password, today)
-    lt_raw = get_lactate_threshold_data(email, password)
-    profile_raw = get_user_profile_data(email, password)
-    readiness_raw = get_training_readiness_data(email, password, today)
-    df_act = get_activities_df(garmin_account=email)
-
-
+@@ -53,87 +54,112 @@ with st.spinner("Récupération des données Garmin Connect…"):
 # ── Parseurs robustes ─────────────────────────────────────────────────────────
 
 def _extract_vo2max(data) -> float | None:
@@ -93,7 +80,22 @@ def _extract_lt(data) -> tuple[int | None, float | None]:
         return None, None
     hr = item.get("lactateThresholdHeartRate") or item.get("heartRate")
     speed = item.get("lactateThresholdSpeed") or item.get("speed")
-    pace = round(1000 / (float(speed) * 60), 3) if speed and float(speed) > 0 else None
+    nested = item.get("speed_and_heart_rate", {}) if isinstance(item, dict) else {}
+    if isinstance(nested, dict):
+        hr = hr or nested.get("heartRate")
+        speed = speed or nested.get("speed")
+
+    speed_mps = None
+    try:
+        speed_mps = float(speed) if speed is not None else None
+    except (TypeError, ValueError):
+        speed_mps = None
+
+    # Garmin peut renvoyer m/s ou km/h selon endpoint/profil
+    if speed_mps and speed_mps > 0:
+        pace = round(1000 / (speed_mps * 60), 3) if speed_mps <= 12 else round(60 / speed_mps, 3)
+    else:
+        pace = None
     return (int(hr) if hr else None), pace
 
 
