@@ -107,15 +107,14 @@ def _extract_lt(data) -> tuple[int | None, float | None]:
     except (TypeError, ValueError):
         speed_mps = None
 
-
     pace = None
     if speed_mps and speed_mps > 0:
         # Garmin peut renvoyer des unités différentes selon endpoint/profil.
         # On teste plusieurs interprétations et on prend la première allure plausible.
         pace_candidates = [
             speed_mps and round(1000 / (speed_mps * 60), 3),  # m/s
-            speed_mps and round(60 / speed_mps, 3),  # km/h
-            speed_mps and round(1 / speed_mps, 3),  # km/min
+            speed_mps and round(60 / speed_mps, 3),           # km/h
+            speed_mps and round(1 / speed_mps, 3),            # km/min
             speed_mps and round(1000 / ((speed_mps * 10) * 60), 3),  # m/s * 10
         ]
         for candidate in pace_candidates:
@@ -124,7 +123,6 @@ def _extract_lt(data) -> tuple[int | None, float | None]:
                 break
         if pace is None:
             pace = pace_candidates[0]
-
     return (int(hr) if hr else None), pace
 
 
@@ -162,10 +160,9 @@ readiness = _extract_readiness(readiness_raw)
 fcmax_activities = int(df_act["max_hr"].dropna().max()) if not df_act.empty and "max_hr" in df_act.columns and df_act["max_hr"].notna().any() else None
 fcmax = fcmax_garmin or fcmax_activities
 
-# VMA depuis VO2max (formule ACSM : VO2 = 3.5 + 0.2*S, S en m/min)
+# VMA depuis VO2max (règle simple demandée : VMA = VO2max / 3.5)
 if vo2max and vo2max > 0:
-    vma_mpm = (vo2max - 3.5) / 0.2
-    vma_kmh = round(vma_mpm * 60 / 1000, 1)
+    vma_kmh = round(vo2max / 3.5, 1)
     vma_pace_min_km = round(60.0 / vma_kmh, 3)  # pace à VMA
     vma_source = "Garmin VO2max"
 else:
@@ -190,7 +187,7 @@ with c1:
 
 with c2:
     if vma_kmh:
-        st.metric("VMA", f"{vma_kmh} km/h", help=f"{format_pace(vma_pace_min_km)} /km — calculée depuis VO2max (ACSM)")
+        st.metric("VMA", f"{vma_kmh} km/h", help=f"{format_pace(vma_pace_min_km)} /km — calculée depuis VO2max / 3.5")
     else:
         st.metric("VMA", "—")
 
