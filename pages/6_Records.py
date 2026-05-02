@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 import streamlit as st
 
@@ -56,6 +58,95 @@ _GARMIN_PRED_KEYS: dict[str, float] = {
 def riegel(t1_s: float, d1_km: float, d2_km: float) -> int:
     return int(t1_s * (d2_km / d1_km) ** 1.06)
 
+
+
+
+def _fit_loglog_linear(anchor_times: dict[float, int]) -> tuple[float, float] | None:
+    """Ajuste log(T)=a+b*log(D) sur les ancres Garmin."""
+    if len(anchor_times) < 2:
+        return None
+    xs = [math.log(d) for d, t in anchor_times.items() if d > 0 and t > 0]
+    ys = [math.log(t) for d, t in anchor_times.items() if d > 0 and t > 0]
+    n = len(xs)
+    if n < 2:
+        return None
+    x_mean = sum(xs) / n
+    y_mean = sum(ys) / n
+    var_x = sum((x - x_mean) ** 2 for x in xs)
+    if var_x == 0:
+        return None
+    cov_xy = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys))
+    b = cov_xy / var_x
+    a = y_mean - b * x_mean
+    return a, b
+
+
+def _build_hybrid_predictor(
+    garmin_predictions: dict[float, int],
+    fallback_ref: tuple[float, float] | None = None,
+):
+    """Construit un prédicteur hybride contraint par les prédictions Garmin.
+
+    - Exact sur les ancres Garmin (5k/10k/semi/marathon)
+    - Interpolation log-log par morceaux entre ancres
+    - Extrapolation via pente locale (ou fallback Riegel)
+    """
+
+    anchors = {d: int(t) for d, t in garmin_predictions.items() if d > 0 and t > 0}
+    if len(anchors) >= 2:
+        d_sorted = sorted(anchors.keys())
+
+        def predict(dist_km: float) -> int | None:
+            if dist_km <= 0:
+                return None
+            if dist_km in anchors:
+                return anchors[dist_km]
+
+            # Extrapolation courte distance
+            if dist_km < d_sorted[0]:
+                d1, d2 = d_sorted[0], d_sorted[1]
+                e = math.log(anchors[d2] / anchors[d1]) / math.log(d2 / d1)
+                return int(round(anchors[d1] * (dist_km / d1) ** e))
+
+            # Extrapolation longue distance
+            if dist_km > d_sorted[-1]:
+                d1, d2 = d_sorted[-2], d_sorted[-1]
+                e = math.log(anchors[d2] / anchors[d1]) / math.log(d2 / d1)
+                return int(round(anchors[d2] * (dist_km / d2) ** e))
+
+            # Interpolation par segments log-log
+            for left, right in zip(d_sorted[:-1], d_sorted[1:]):
+                if left <= dist_km <= right:
+                    e = math.log(anchors[right] / anchors[left]) / math.log(right / left)
+                    return int(round(anchors[left] * (dist_km / left) ** e))
+            return None
+
+        return predict
+
+    # Fallback 1: régression log-log globale si ancres insuffisantes
+    fit = _fit_loglog_linear(anchors)
+    if fit:
+        a, b = fit
+
+        def predict_reg(dist_km: float) -> int | None:
+            if dist_km <= 0:
+                return None
+            return int(round(math.exp(a + b * math.log(dist_km))))
+
+        return predict_reg
+
+    # Fallback 2: Riegel avec une référence unique
+    if fallback_ref is not None:
+        d_ref, t_ref = fallback_ref
+
+        def predict_riegel(dist_km: float) -> int | None:
+            if dist_km <= 0:
+                return None
+            return riegel(t_ref, d_ref, dist_km)
+
+        return predict_riegel
+
+    return lambda _dist_km: None
 
 def best_activity_for_distance(df: pd.DataFrame, low_km: float, high_km: float) -> dict | None:
     mask = (df["distance_km"] >= low_km) & (df["distance_km"] <= high_km) & (df["duration_min"] > 0)
@@ -198,6 +289,12 @@ for ref_prio in [5.0, 10.0, 21.0975, 42.195, 1.0]:
         ref_time_s = int(best["duration_min"] * 60 * ref_prio / best["distance_km"])
         break
 
+# ── Construction du prédicteur hybride ───────────────────────────────────────
+predict_time_s = _build_hybrid_predictor(
+    garmin_predictions=garmin_preds,
+    fallback_ref=(ref_dist_km, ref_time_s) if (ref_dist_km and ref_time_s) else None,
+)
+
 # ── Tableau records + prédictions ────────────────────────────────────────────
 rows = []
 for label, dist_km, low, high in TARGETS:
@@ -226,14 +323,15 @@ for label, dist_km, low, high in TARGETS:
         pred_str = format_duration_hms(garmin_pred_s)
         pred_pace = format_pace(garmin_pred_s / 60 / dist_km)
         pred_source = "Garmin ✅"
-    elif ref_dist_km and ref_time_s:
-        riegel_s = riegel(ref_time_s, ref_dist_km, dist_km)
-        pred_str = format_duration_hms(riegel_s)
-        pred_pace = format_pace(riegel_s / 60 / dist_km)
-        pred_source = "Riegel ⚙️"
     else:
-        pred_str = pred_pace = "—"
-        pred_source = "—"
+        model_s = predict_time_s(dist_km)
+        if model_s:
+            pred_str = format_duration_hms(model_s)
+            pred_pace = format_pace(model_s / 60 / dist_km)
+            pred_source = "Modèle calibré ⚙️" if garmin_preds else "Riegel ⚙️"
+        else:
+            pred_str = pred_pace = "—"
+            pred_source = "—"
 
     rows.append({
         "Distance": label,
@@ -250,7 +348,9 @@ st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 if not garmin_prs:
     st.caption("ℹ️ Aucun record Garmin natif disponible — affichage des meilleures activités à distance équivalente.")
-if not garmin_preds:
+if garmin_preds:
+    st.caption("ℹ️ Les distances sans prédiction Garmin sont estimées via un modèle hybride calibré sur 5k/10k/semi/marathon.")
+elif not garmin_preds:
     st.caption("ℹ️ Aucune prédiction Garmin native disponible — prédictions calculées via formule de Riegel.")
 
 # ── Données brutes debug ──────────────────────────────────────────────────────
