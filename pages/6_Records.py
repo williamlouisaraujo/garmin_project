@@ -5,16 +5,12 @@ import math
 import pandas as pd
 import streamlit as st
 
-from src.auth import require_password
 from src.garmin_client import (
     get_personal_records_native,
     get_race_predictions_native,
 )
 from src.storage import get_accounts, get_activities_df
 from src.transform import format_duration_hms, format_pace
-
-st.set_page_config(page_title="Records", page_icon="🏆", layout="wide")
-require_password()
 
 st.title("🏆 Records & Prédictions")
 st.caption("Records personnels et prédictions de course issus de Garmin Connect.")
@@ -250,14 +246,9 @@ account_labels = {a["email"]: a.get("label", a["email"]) for a in accounts}
 
 # ── Filtre compte ─────────────────────────────────────────────────────────────
 if len(accounts) > 1:
-    options = ["Tous"] + list(account_labels.values())
-    choix = st.selectbox("Utilisateur", options)
-    if choix == "Tous":
-        selected_acc = None
-        selected_df = df_all
-    else:
-        selected_acc = next(a for a in accounts if a.get("label", a["email"]) == choix)
-        selected_df = df_all[df_all["garmin_account"] == selected_acc["email"]]
+    choix = st.selectbox("Utilisateur", list(account_labels.values()))
+    selected_acc = next(a for a in accounts if a.get("label", a["email"]) == choix)
+    selected_df = df_all[df_all["garmin_account"] == selected_acc["email"]]
 else:
     selected_acc = accounts[0] if accounts else None
     selected_df = df_all
@@ -360,21 +351,3 @@ with st.expander("🔍 Données brutes Garmin (diagnostic)", expanded=False):
     st.write("**Prédictions natives**")
     st.json(pred_raw)
 
-# ── Comparaison multi-comptes ─────────────────────────────────────────────────
-if len(accounts) > 1 and selected_acc is None:
-    st.divider()
-    st.subheader("Comparaison entre utilisateurs")
-    comp_rows: list[dict] = []
-    for label, dist_km, low, high in TARGETS:
-        row: dict = {"Distance": label}
-        for acc in accounts:
-            acc_lbl = account_labels.get(acc["email"], acc["email"])
-            acc_df = df_all[df_all["garmin_account"] == acc["email"]]
-            best = best_activity_for_distance(acc_df, low, high)
-            if best:
-                t_s = int(best["duration_min"] * 60 * dist_km / best["distance_km"])
-                row[acc_lbl] = format_duration_hms(t_s)
-            else:
-                row[acc_lbl] = "—"
-        comp_rows.append(row)
-    st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)

@@ -5,7 +5,6 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from src.auth import require_password
 from src.garmin_client import (
     get_lactate_threshold_data,
     get_training_readiness_data,
@@ -15,9 +14,6 @@ from src.garmin_client import (
 )
 from src.storage import get_accounts, get_activities_df
 from src.transform import format_pace
-
-st.set_page_config(page_title="Forme actuelle", page_icon="💪", layout="wide")
-require_password()
 
 st.title("💪 Forme actuelle")
 

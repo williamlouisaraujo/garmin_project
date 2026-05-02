@@ -4,15 +4,11 @@ from datetime import date, timedelta
 
 import streamlit as st
 
-from src.auth import require_password
 from src.garmin_client import get_vo2max_data
 from src.storage import get_accounts
 from src.tcx_writer import generate_tcx
 from src.training_plan import Session, _race_pct_vma, generate_plan
 from src.transform import format_pace
-
-st.set_page_config(page_title="Programme", page_icon="📅", layout="wide")
-require_password()
 
 st.title("📅 Programme d'entraînement")
 st.caption("Configurez un objectif et obtenez un plan basé sur votre VMA avec séances téléchargeables.")
