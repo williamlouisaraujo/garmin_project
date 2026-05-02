@@ -71,6 +71,7 @@ def save_activities(raw_list: list[dict], garmin_account: str = "") -> int:
             on_conflict="activity_id",
             ignore_duplicates=True,
         ).execute()
+    new_count = len(new_rows)
 
     db.table("sync_log").insert({
         "synced_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
