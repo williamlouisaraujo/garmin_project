@@ -5,12 +5,8 @@ from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
 
-from src.auth import require_password
 from src.storage import get_accounts, get_activities_df
 from src.transform import format_duration, format_pace
-
-st.set_page_config(page_title="Stats globales", page_icon="📊", layout="wide")
-require_password()
 
 st.title("📊 Stats globales")
 
@@ -32,12 +28,12 @@ df_all["start_time"] = pd.to_datetime(df_all["start_time"])
 account_labels = {a["email"]: a.get("label", a["email"]) for a in accounts}
 account_emails = list(account_labels.keys())
 
-selected_account = None
 if len(accounts) > 1:
-    options = ["Tous les comptes"] + [account_labels[e] for e in account_emails]
+    options = [account_labels[e] for e in account_emails]
     choix = st.selectbox("Compte", options)
-    if choix != "Tous les comptes":
-        selected_account = next(e for e in account_emails if account_labels[e] == choix)
+    selected_account = next(e for e in account_emails if account_labels[e] == choix)
+else:
+    selected_account = account_emails[0] if account_emails else None
 
 df = df_all if selected_account is None else df_all[df_all["garmin_account"] == selected_account]
 

@@ -1,11 +1,6 @@
 import streamlit as st
 
-from src.auth import require_password
-
-st.set_page_config(page_title="Paramètres", page_icon="⚙️", layout="wide")
-require_password()
-
-st.title("⚙️ Paramètres")
+st.title("⚙️ Réglages")
 
 st.info(
     "La gestion des comptes Garmin (ajout, suppression, synchronisation) "

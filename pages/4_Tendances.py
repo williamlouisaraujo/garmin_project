@@ -1,14 +1,10 @@
 import streamlit as st
 
-from src.auth import require_password
 from src.charts import weekly_count_chart, weekly_distance_chart, weekly_elevation_chart
 from src.storage import get_accounts, get_activities_df
 from src.transform import weekly_aggregation
 
-st.set_page_config(page_title="Tendances", page_icon="📈", layout="wide")
-require_password()
-
-st.title("📈 Tendances")
+st.title("📈 Vision hebdo")
 st.caption("Évolution hebdomadaire de tes activités")
 
 # ── Chargement ────────────────────────────────────────────────────────────────
@@ -24,14 +20,15 @@ if df_all.empty:
     st.stop()
 
 # ── Filtre compte ─────────────────────────────────────────────────────────────
-df = df_all
 if len(accounts) > 1:
     account_labels = {a["email"]: a.get("label", a["email"]) for a in accounts}
-    options = ["Tous les comptes"] + list(account_labels.values())
-    choix = st.selectbox("Utilisateur", options)
-    if choix != "Tous les comptes":
-        selected_email = next(e for e, lbl in account_labels.items() if lbl == choix)
-        df = df_all[df_all["garmin_account"] == selected_email]
+    choix = st.selectbox("Utilisateur", list(account_labels.values()))
+    selected_email = next(e for e, lbl in account_labels.items() if lbl == choix)
+    df = df_all[df_all["garmin_account"] == selected_email]
+elif accounts:
+    df = df_all[df_all["garmin_account"] == accounts[0]["email"]]
+else:
+    df = df_all
 
 weekly = weekly_aggregation(df)
 

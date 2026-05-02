@@ -1,14 +1,10 @@
 import pandas as pd
 import streamlit as st
 
-from src.auth import require_password
 from src.storage import get_accounts, get_activities_df
 from src.transform import compute_vap, format_duration, format_pace
 
-st.set_page_config(page_title="Historique des activités", page_icon="📋", layout="wide")
-require_password()
-
-st.title("📋 Historique des activités")
+st.title("📋 Liste des activités")
 
 # ── Chargement ────────────────────────────────────────────────────────────────
 try:
