@@ -37,19 +37,33 @@ def save_activities(raw_list: list[dict], garmin_account: str = "") -> int:
 
     db = get_supabase()
 
-    existing = db.table("activities").select("activity_id").execute()
-    existing_ids = {row["activity_id"] for row in existing.data}
-
-    new_rows = []
+    normalized_rows = []
+    seen_ids = set()
     for raw in raw_list:
         row = normalize_activity(raw)
-        if row is None or row["activity_id"] in existing_ids:
+        if row is None:
             continue
+        activity_id = row["activity_id"]
+        if activity_id in seen_ids:
+            continue
+        seen_ids.add(activity_id)
         row["garmin_account"] = garmin_account
-        new_rows.append(row)
+        normalized_rows.append(row)
+
+    if normalized_rows:
+        candidate_ids = [row["activity_id"] for row in normalized_rows]
+        existing = db.table("activities").select("activity_id").in_("activity_id", candidate_ids).execute()
+        existing_ids = {row["activity_id"] for row in (existing.data or [])}
+        new_rows = [row for row in normalized_rows if row["activity_id"] not in existing_ids]
+    else:
+        new_rows = []
 
     if new_rows:
-        db.table("activities").insert(new_rows).execute()
+        db.table("activities").upsert(
+            new_rows,
+            on_conflict="activity_id",
+            ignore_duplicates=True,
+        ).execute()
 
     db.table("sync_log").insert({
         "synced_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
