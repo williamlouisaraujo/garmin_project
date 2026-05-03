@@ -1,15 +1,20 @@
+from urllib.parse import unquote
+
 import streamlit as st
 
 from src.garmin_client import fetch_activities, fetch_all_activities
 from src.storage import (
-    delete_strava_credentials,
+    delete_strava_account,
     get_accounts,
     get_last_sync,
-    get_strava_credentials,
+    get_strava_account_for_garmin,
+    get_strava_accounts,
+    get_strava_app_config,
     save_accounts,
     save_activities,
-    save_strava_credentials,
-    save_strava_records,
+    save_strava_account,
+    save_strava_app_config,
+    save_strava_records_for_garmin,
 )
 from src.strava_client import (
     exchange_code,
@@ -137,151 +142,197 @@ with st.expander("➕ Ajouter un compte Garmin", expanded=not accounts):
 
 st.divider()
 
-# ── Bloc Strava ───────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# STRAVA
+# ═════════════════════════════════════════════════════════════════════════════
 st.subheader("Strava")
-st.caption("Connectez votre compte Strava pour récupérer vos records.")
+st.caption(
+    "Un seul compte développeur Strava suffit pour tous les utilisateurs. "
+    "Chaque utilisateur se connecte ensuite individuellement via OAuth."
+)
 
-# ── Debug Strava (toujours visible pour diagnostic) ───────────────────────────
-with st.expander("🔍 Debug Strava", expanded=False):
-    all_params = dict(st.query_params)
-    st.write("**Paramètres URL détectés :**", all_params if all_params else "_aucun_")
-    _dbg_creds = get_strava_credentials()
-    if _dbg_creds:
-        st.write("**Credentials stockés :**", {
-            "client_id": _dbg_creds.get("client_id", "—"),
-            "client_secret": "***" if _dbg_creds.get("client_secret") else "—",
-            "redirect_uri": _dbg_creds.get("redirect_uri", "—"),
-            "access_token": "présent ✅" if _dbg_creds.get("access_token") else "absent ❌",
-            "refresh_token": "présent ✅" if _dbg_creds.get("refresh_token") else "absent ❌",
-            "expires_at": _dbg_creds.get("expires_at", "—"),
-            "athlete": _dbg_creds.get("athlete", "—"),
-        })
-    else:
-        st.write("**Credentials stockés :** _aucun_")
+# ── Retour OAuth Strava ───────────────────────────────────────────────────────
+# Quand Strava redirige vers cette page avec ?code=XXX&state=garmin_email,
+# on échange le code et on lie le compte Strava au compte Garmin correspondant.
+_oauth_code = st.query_params.get("code")
+_oauth_error = st.query_params.get("error")
+_oauth_state = unquote(st.query_params.get("state", ""))  # garmin_email encodé
 
-# Détection du retour OAuth Strava.
-# On vérifie uniquement la présence du code (pas le scope) car Strava
-# peut retourner "read,activity:read_all" ou d'autres variantes.
-strava_code = st.query_params.get("code")
-strava_error = st.query_params.get("error")
-
-if strava_error:
-    st.error(f"❌ Strava a refusé l'autorisation : {strava_error}. Réessayez.")
+if _oauth_error:
+    st.error(f"❌ Strava a refusé l'autorisation : `{_oauth_error}`. Réessayez.")
     st.query_params.clear()
-elif strava_code:
-    strava_creds = get_strava_credentials()
-    if strava_creds and strava_creds.get("client_id"):
-        with st.spinner("Finalisation de la connexion Strava…"):
+elif _oauth_code:
+    _app_cfg = get_strava_app_config()
+    if not _app_cfg or not _app_cfg.get("client_id"):
+        st.warning("⚠️ Code OAuth reçu mais configuration Strava introuvable. Configurez l'application ci-dessous.")
+    elif not _oauth_state:
+        st.warning("⚠️ Code OAuth reçu mais le compte Garmin de destination est inconnu (state manquant).")
+    else:
+        with st.spinner(f"Connexion Strava pour {_oauth_state}…"):
             try:
                 tokens = exchange_code(
-                    strava_creds["client_id"],
-                    strava_creds["client_secret"],
-                    strava_code,
+                    _app_cfg["client_id"],
+                    _app_cfg["client_secret"],
+                    _oauth_code,
                 )
-                save_strava_credentials({**strava_creds, **tokens})
+                athlete = tokens.get("athlete") or {}
+                save_strava_account({
+                    "garmin_email": _oauth_state,
+                    "access_token": tokens["access_token"],
+                    "refresh_token": tokens["refresh_token"],
+                    "expires_at": tokens.get("expires_at", 0),
+                    "athlete": athlete,
+                })
+                athlete_name = f"{athlete.get('firstname', '')} {athlete.get('lastname', '')}".strip()
                 st.query_params.clear()
-                st.success("✅ Connexion Strava réussie !")
+                st.success(f"✅ Strava connecté pour **{_oauth_state}** ({athlete_name or 'athlète'}).")
                 st.rerun()
             except Exception as exc:
-                st.error(f"❌ Erreur lors de la connexion OAuth Strava : {exc}")
-                st.info("Vérifiez que le Client Secret est correct et que le code n'a pas expiré (valable 10 min).")
-    else:
-        st.warning("⚠️ Code Strava reçu mais configuration introuvable. Enregistrez vos identifiants ci-dessous d'abord.")
+                st.error(f"❌ Erreur OAuth Strava : {exc}")
+                st.info("Vérifiez que le Client Secret est correct. Le code expire après 10 minutes.")
 
-strava_creds = get_strava_credentials()
-is_connected = bool(strava_creds and strava_creds.get("access_token"))
+# ── Configuration de l'application Strava (partagée) ─────────────────────────
+app_cfg = get_strava_app_config()
+has_app_cfg = bool(app_cfg and app_cfg.get("client_id") and app_cfg.get("client_secret"))
 
-if is_connected:
-    athlete = strava_creds.get("athlete") or {}
-    athlete_name = f"{athlete.get('firstname', '')} {athlete.get('lastname', '')}".strip()
-    display_name = athlete_name or f"Athlète #{athlete.get('id', '?')}"
-
-    with st.container(border=True):
-        col_info, col_sync, col_del = st.columns([5, 2, 1])
-
-        with col_info:
-            st.markdown(f"**{display_name}**")
-            st.caption("Strava — Connecté ✅")
-
-        with col_sync:
-            if st.button("🔄 Sync records", key="strava_sync", use_container_width=True):
-                progress_bar = st.progress(0, text="Récupération des activités Strava…")
-
-                def strava_progress(done: int, total: int) -> None:
-                    progress_bar.progress(done / total, text=f"Activité {done}/{total}…")
-
-                with st.spinner("Récupération des records Strava…"):
-                    try:
-                        records = fetch_strava_records(
-                            strava_creds,
-                            progress_callback=strava_progress,
-                        )
-                        progress_bar.empty()
-                        if records:
-                            save_strava_records(records)
-                            st.success(f"✅ {len(records)} distance(s) enregistrée(s) depuis Strava.")
-                        else:
-                            st.info("ℹ️ Aucun record Strava trouvé sur les activités récentes.")
-                    except ValueError as exc:
-                        st.error(f"⚠️ {exc}")
-                    except RuntimeError as exc:
-                        st.error(f"⏱️ {exc}")
-                    except Exception as exc:
-                        st.error(f"❌ Erreur Strava : {exc}")
-
-        with col_del:
-            if st.button("🗑️", key="strava_del", help="Déconnecter Strava"):
-                delete_strava_credentials()
-                st.rerun()
-
-else:
-    # Formulaire de configuration (client_id / client_secret / redirect_uri)
-    has_client = bool(strava_creds and strava_creds.get("client_id"))
-
-    with st.expander("⚙️ Configurer l'application Strava", expanded=not has_client):
-        st.markdown(
-            "Créez une application sur [strava.com/settings/api](https://www.strava.com/settings/api) "
-            "et renseignez ci-dessous le **Client ID**, le **Client Secret** et l'**URL de redirection** "
-            "configurée dans votre application Strava (doit correspondre exactement)."
-        )
-        with st.form("strava_config"):
-            col_id, col_sec = st.columns(2)
-            with col_id:
-                client_id = st.text_input(
-                    "Client ID",
-                    value=strava_creds.get("client_id", "") if strava_creds else "",
-                )
-            with col_sec:
-                client_secret = st.text_input(
-                    "Client Secret",
-                    type="password",
-                    value=strava_creds.get("client_secret", "") if strava_creds else "",
-                )
-            redirect_uri = st.text_input(
-                "URL de redirection",
-                value=strava_creds.get("redirect_uri", "") if strava_creds else "",
-                placeholder="https://votre-app.streamlit.app/sync",
-                help="Doit être identique à l'URL déclarée dans votre application Strava.",
+with st.expander(
+    "⚙️ Application Strava (configuration partagée)",
+    expanded=not has_app_cfg,
+):
+    st.markdown(
+        "Créez une application sur [strava.com/settings/api](https://www.strava.com/settings/api). "
+        "Cette configuration est partagée par tous les utilisateurs de l'app.\n\n"
+        "**Domaine du rappel pour l'autorisation** (dans Strava) : uniquement le domaine, "
+        "sans `https://` ni chemin. Ex : `garmin-project-app-wa.streamlit.app`"
+    )
+    with st.form("strava_app_config"):
+        col_id, col_sec = st.columns(2)
+        with col_id:
+            _cid = st.text_input(
+                "Client ID",
+                value=app_cfg.get("client_id", "") if app_cfg else "",
             )
-            cfg_submitted = st.form_submit_button("💾 Enregistrer la configuration", use_container_width=True)
-
-        if cfg_submitted:
-            if not client_id or not client_secret or not redirect_uri:
-                st.error("Client ID, Client Secret et URL de redirection sont tous requis.")
-            else:
-                save_strava_credentials({
-                    "client_id": client_id.strip(),
-                    "client_secret": client_secret.strip(),
-                    "redirect_uri": redirect_uri.strip(),
-                })
-                st.success("✅ Configuration Strava enregistrée.")
-                st.rerun()
-
-    strava_creds = get_strava_credentials()
-    if strava_creds and strava_creds.get("client_id") and strava_creds.get("redirect_uri"):
-        auth_url = get_auth_url(strava_creds["client_id"], strava_creds["redirect_uri"])
-        st.link_button("🔗 Connecter à Strava", auth_url, use_container_width=False)
-        st.caption(
-            "Vous serez redirigé vers Strava pour autoriser l'accès, "
-            "puis renvoyé automatiquement sur cette page."
+        with col_sec:
+            _csec = st.text_input(
+                "Client Secret",
+                type="password",
+                value=app_cfg.get("client_secret", "") if app_cfg else "",
+            )
+        _ruri = st.text_input(
+            "URL de redirection",
+            value=app_cfg.get("redirect_uri", "") if app_cfg else "",
+            placeholder="https://garmin-project-app-wa.streamlit.app/sync",
+            help="URL complète de cette page — doit correspondre exactement à ce qui est déclaré dans Strava.",
         )
+        _cfg_ok = st.form_submit_button("💾 Enregistrer la configuration", use_container_width=True)
+
+    if _cfg_ok:
+        if not _cid or not _csec or not _ruri:
+            st.error("Les trois champs sont requis.")
+        else:
+            save_strava_app_config({
+                "client_id": _cid.strip(),
+                "client_secret": _csec.strip(),
+                "redirect_uri": _ruri.strip(),
+            })
+            st.success("✅ Configuration Strava enregistrée.")
+            st.rerun()
+
+# ── Connexion Strava par compte Garmin ────────────────────────────────────────
+app_cfg = get_strava_app_config()
+
+if not accounts:
+    st.info("ℹ️ Ajoutez d'abord un compte Garmin pour pouvoir lier Strava.")
+elif not has_app_cfg:
+    st.info("ℹ️ Configurez l'application Strava ci-dessus avant de connecter les comptes.")
+else:
+    st.markdown("**Connexion Strava par utilisateur**")
+    st.caption(
+        "Chaque utilisateur autorise l'accès à son propre compte Strava. "
+        "Le bouton ouvre une page Strava dans un nouvel onglet — après autorisation, "
+        "vous serez redirigé automatiquement ici."
+    )
+
+    for account in accounts:
+        garmin_email = account["email"]
+        garmin_label = account.get("label") or garmin_email
+        strava_acc = get_strava_account_for_garmin(garmin_email)
+        is_linked = bool(strava_acc and strava_acc.get("access_token"))
+
+        with st.container(border=True):
+            col_info, col_action, col_del = st.columns([4, 3, 1])
+
+            with col_info:
+                st.markdown(f"**{garmin_label}**")
+                if is_linked:
+                    athlete = strava_acc.get("athlete") or {}
+                    athlete_name = f"{athlete.get('firstname', '')} {athlete.get('lastname', '')}".strip()
+                    st.caption(f"Strava : {athlete_name or 'connecté'} ✅")
+                else:
+                    st.caption("Strava : non connecté")
+
+            with col_action:
+                if is_linked:
+                    if st.button("🔄 Sync records Strava", key=f"strava_sync_{garmin_email}", use_container_width=True):
+                        progress_bar = st.progress(0, text="Récupération des activités…")
+
+                        def _strava_progress(done: int, total: int) -> None:
+                            progress_bar.progress(done / total, text=f"Activité {done}/{total}…")
+
+                        with st.spinner("Récupération des records Strava…"):
+                            try:
+                                records = fetch_strava_records(
+                                    app_cfg,
+                                    strava_acc,
+                                    progress_callback=_strava_progress,
+                                )
+                                progress_bar.empty()
+                                if records:
+                                    save_strava_records_for_garmin(garmin_email, records)
+                                    st.success(f"✅ {len(records)} distance(s) enregistrée(s) pour {garmin_label}.")
+                                else:
+                                    st.info("ℹ️ Aucun record Strava trouvé sur les activités récentes.")
+                            except ValueError as exc:
+                                st.error(f"⚠️ {exc}")
+                            except RuntimeError as exc:
+                                st.error(f"⏱️ {exc}")
+                            except Exception as exc:
+                                st.error(f"❌ Erreur Strava : {exc}")
+                else:
+                    auth_url = get_auth_url(
+                        app_cfg["client_id"],
+                        app_cfg["redirect_uri"],
+                        state=garmin_email,
+                    )
+                    st.link_button(
+                        "🔗 Connecter Strava",
+                        auth_url,
+                        use_container_width=True,
+                    )
+
+            with col_del:
+                if is_linked:
+                    if st.button("🗑️", key=f"strava_del_{garmin_email}", help="Déconnecter Strava"):
+                        delete_strava_account(garmin_email)
+                        st.rerun()
+
+# ── Debug Strava ──────────────────────────────────────────────────────────────
+with st.expander("🔍 Debug Strava", expanded=False):
+    st.write("**Paramètres URL détectés :**", dict(st.query_params) or "_aucun_")
+    _dbg_cfg = get_strava_app_config()
+    st.write("**App config :**", {
+        "client_id": _dbg_cfg.get("client_id", "—") if _dbg_cfg else "—",
+        "client_secret": "***" if (_dbg_cfg and _dbg_cfg.get("client_secret")) else "—",
+        "redirect_uri": _dbg_cfg.get("redirect_uri", "—") if _dbg_cfg else "—",
+    })
+    _dbg_strava_accounts = get_strava_accounts()
+    st.write(f"**Comptes Strava liés ({len(_dbg_strava_accounts)}) :**")
+    for _sa in _dbg_strava_accounts:
+        _ath = _sa.get("athlete") or {}
+        st.write({
+            "garmin_email": _sa.get("garmin_email"),
+            "athlete": f"{_ath.get('firstname', '')} {_ath.get('lastname', '')}".strip() or "—",
+            "access_token": "présent ✅" if _sa.get("access_token") else "absent ❌",
+        })
+    if not _dbg_strava_accounts:
+        st.write("_aucun_")

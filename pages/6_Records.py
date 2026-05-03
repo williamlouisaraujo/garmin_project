@@ -9,7 +9,12 @@ from src.garmin_client import (
     get_personal_records_native,
     get_race_predictions_native,
 )
-from src.storage import get_accounts, get_activities_df, get_strava_credentials, get_strava_records
+from src.storage import (
+    get_accounts,
+    get_activities_df,
+    get_strava_account_for_garmin,
+    get_strava_records_for_garmin,
+)
 from src.transform import format_duration_hms, format_pace
 
 st.title("🏆 Records & Prédictions")
@@ -27,21 +32,17 @@ TARGETS: list[tuple[str, float, float, float]] = [
     ("100 km",      100.0,    95.0, 105.0),
 ]
 
-# Mapping typeId (int) Garmin PR → distance_km
-# Dérivé de l'observation réelle : typeId 5 → semi (5860s = 1:37:40)
 _GARMIN_PR_TYPE_IDS: dict[int, float] = {
-    1:  1.0,      # Fastest 1 km
-    2:  1.60934,  # Fastest 1 mile
-    3:  5.0,      # Fastest 5 km
-    4:  10.0,     # Fastest 10 km
-    5:  21.0975,  # Fastest half marathon
-    6:  42.195,   # Fastest marathon
-    7:  50.0,     # Fastest 50 km
-    8:  100.0,    # Fastest 100 km
-    # typeIds 12-16 = records non temporels (longest distance, elevation, etc.)
+    1:  1.0,
+    2:  1.60934,
+    3:  5.0,
+    4:  10.0,
+    5:  21.0975,
+    6:  42.195,
+    7:  50.0,
+    8:  100.0,
 }
 
-# Mapping clés prédictions Garmin → distance_km (format réel observé)
 _GARMIN_PRED_KEYS: dict[str, float] = {
     "time5K":           5.0,
     "time10K":          10.0,
@@ -55,7 +56,6 @@ def riegel(t1_s: float, d1_km: float, d2_km: float) -> int:
 
 
 def _fit_loglog_linear(anchor_times: dict[float, int]) -> tuple[float, float] | None:
-    """Ajuste log(T)=a+b*log(D) sur les ancres Garmin."""
     if len(anchor_times) < 2:
         return None
     xs = [math.log(d) for d, t in anchor_times.items() if d > 0 and t > 0]
@@ -78,13 +78,6 @@ def _build_hybrid_predictor(
     garmin_predictions: dict[float, int],
     fallback_ref: tuple[float, float] | None = None,
 ):
-    """Construit un prédicteur hybride contraint par les prédictions Garmin.
-
-    - Exact sur les ancres Garmin (5k/10k/semi/marathon)
-    - Interpolation log-log par morceaux entre ancres
-    - Extrapolation via pente locale (ou fallback Riegel)
-    """
-
     anchors = {d: int(t) for d, t in garmin_predictions.items() if d > 0 and t > 0}
     if len(anchors) >= 2:
         d_sorted = sorted(anchors.keys())
@@ -94,20 +87,14 @@ def _build_hybrid_predictor(
                 return None
             if dist_km in anchors:
                 return anchors[dist_km]
-
-            # Extrapolation courte distance
             if dist_km < d_sorted[0]:
                 d1, d2 = d_sorted[0], d_sorted[1]
                 e = math.log(anchors[d2] / anchors[d1]) / math.log(d2 / d1)
                 return int(round(anchors[d1] * (dist_km / d1) ** e))
-
-            # Extrapolation longue distance
             if dist_km > d_sorted[-1]:
                 d1, d2 = d_sorted[-2], d_sorted[-1]
                 e = math.log(anchors[d2] / anchors[d1]) / math.log(d2 / d1)
                 return int(round(anchors[d2] * (dist_km / d2) ** e))
-
-            # Interpolation par segments log-log
             for left, right in zip(d_sorted[:-1], d_sorted[1:]):
                 if left <= dist_km <= right:
                     e = math.log(anchors[right] / anchors[left]) / math.log(right / left)
@@ -116,7 +103,6 @@ def _build_hybrid_predictor(
 
         return predict
 
-    # Fallback 1: régression log-log globale si ancres insuffisantes
     fit = _fit_loglog_linear(anchors)
     if fit:
         a, b = fit
@@ -128,7 +114,6 @@ def _build_hybrid_predictor(
 
         return predict_reg
 
-    # Fallback 2: Riegel avec une référence unique
     if fallback_ref is not None:
         d_ref, t_ref = fallback_ref
 
@@ -152,7 +137,6 @@ def best_activity_for_distance(df: pd.DataFrame, low_km: float, high_km: float) 
 
 
 def _parse_pr_time_s(value) -> float | None:
-    """Essaie d'interpréter la valeur Garmin comme des secondes."""
     if value is None:
         return None
     try:
@@ -163,11 +147,6 @@ def _parse_pr_time_s(value) -> float | None:
 
 
 def _parse_garmin_prs(raw) -> dict[float, dict]:
-    """Extrait les PRs Garmin et les mappe sur une distance en km.
-
-    Format réel observé : liste de dicts avec typeId (int), value (secondes),
-    prStartTimeGmtFormatted (date).
-    """
     result: dict[float, dict] = {}
     if not raw:
         return result
@@ -205,11 +184,6 @@ def _parse_garmin_prs(raw) -> dict[float, dict]:
 
 
 def _parse_garmin_predictions(raw) -> dict[float, int]:
-    """Extrait les prédictions Garmin en {distance_km: seconds}.
-
-    Format réel observé : dict plat avec clés time5K, time10K,
-    timeHalfMarathon, timeMarathon (valeurs en secondes).
-    """
     result: dict[float, int] = {}
     if not raw:
         return result
@@ -227,6 +201,26 @@ def _parse_garmin_predictions(raw) -> dict[float, int]:
     return result
 
 
+# ── Chargement des comptes (nécessaire pour les deux sources) ─────────────────
+try:
+    accounts = get_accounts()
+except Exception as exc:
+    st.error(f"❌ Supabase inaccessible : {exc}")
+    st.stop()
+
+if not accounts:
+    st.info("Aucun compte configuré. Synchronisez depuis la page Connexion.")
+    st.stop()
+
+account_labels = {a["email"]: a.get("label", a["email"]) for a in accounts}
+
+# ── Filtre utilisateur (commun aux deux sources) ──────────────────────────────
+if len(accounts) > 1:
+    choix = st.selectbox("Utilisateur", list(account_labels.values()))
+    selected_acc = next(a for a in accounts if a.get("label", a["email"]) == choix)
+else:
+    selected_acc = accounts[0]
+
 # ── Filtre source ─────────────────────────────────────────────────────────────
 source_filter = st.radio(
     "Source",
@@ -241,29 +235,30 @@ st.divider()
 # Branche STRAVA
 # ═════════════════════════════════════════════════════════════════════════════
 if source_filter == "Strava":
-    st.caption("Records personnels issus de Strava.")
+    garmin_email = selected_acc["email"]
+    garmin_label = selected_acc.get("label", garmin_email)
+    st.caption(f"Records Strava de **{garmin_label}** (depuis Supabase — sync depuis la page Synchronisation).")
 
-    try:
-        strava_creds = get_strava_credentials()
-        strava_cached = get_strava_records()
-    except Exception as exc:
-        st.error(f"❌ Supabase inaccessible : {exc}")
-        st.stop()
-
-    if not strava_creds or not strava_creds.get("access_token"):
-        st.info("ℹ️ Connectez votre compte Strava depuis la page **Synchronisation**.")
-        st.stop()
-
-    if strava_cached is None:
+    strava_acc = get_strava_account_for_garmin(garmin_email)
+    if not strava_acc or not strava_acc.get("access_token"):
         st.info(
-            "ℹ️ Aucun record Strava disponible. "
-            "Cliquez sur **🔄 Sync records** dans la page Synchronisation."
+            f"ℹ️ Le compte Strava de **{garmin_label}** n'est pas connecté. "
+            "Allez dans **Synchronisation** et cliquez sur **🔗 Connecter Strava** "
+            f"en face de {garmin_label}."
+        )
+        st.stop()
+
+    strava_records = get_strava_records_for_garmin(garmin_email)
+    if strava_records is None:
+        st.info(
+            f"ℹ️ Aucun record Strava disponible pour **{garmin_label}**. "
+            "Allez dans **Synchronisation** et cliquez sur **🔄 Sync records Strava**."
         )
         st.stop()
 
     rows = []
     for label, dist_km, _low, _high in TARGETS:
-        record = strava_cached.get(dist_km)
+        record = strava_records.get(dist_km)
         if record:
             t_s = int(record["time_s"])
             rows.append({
@@ -286,18 +281,16 @@ if source_filter == "Strava":
 
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    covered = [label for label, dist_km, *_ in TARGETS if dist_km in strava_cached]
-    missing = [label for label, dist_km, *_ in TARGETS if dist_km not in strava_cached]
+    missing = [lbl for lbl, dist_km, *_ in TARGETS if dist_km not in strava_records]
     if missing:
         st.caption(
-            f"ℹ️ Distances non couvertes par Strava : {', '.join(missing)}. "
-            "Strava ne propose pas de best_efforts pour ces distances ou elles "
-            "n'ont pas encore été réalisées dans vos activités récentes."
+            f"ℹ️ Distances sans record Strava : {', '.join(missing)}. "
+            "Strava ne propose pas de best_efforts pour ces distances, "
+            "ou elles n'ont pas encore été réalisées dans les activités récentes."
         )
 
-    # Debug Strava
     with st.expander("🔍 Données brutes Strava (diagnostic)", expanded=False):
-        st.json({str(k): v for k, v in strava_cached.items()})
+        st.json({str(k): v for k, v in strava_records.items()})
 
     st.stop()
 
@@ -306,29 +299,18 @@ if source_filter == "Strava":
 # ═════════════════════════════════════════════════════════════════════════════
 st.caption("Records personnels et prédictions de course issus de Garmin Connect.")
 
-# ── Chargement ────────────────────────────────────────────────────────────────
 try:
-    accounts = get_accounts()
     df_all = get_activities_df()
 except Exception as exc:
     st.error(f"❌ Supabase inaccessible : {exc}")
     st.stop()
 
-if df_all.empty and not accounts:
+if df_all.empty:
     st.info("Aucune activité. Synchronisez depuis la page Connexion.")
     st.stop()
 
 df_all["start_time"] = pd.to_datetime(df_all["start_time"])
-account_labels = {a["email"]: a.get("label", a["email"]) for a in accounts}
-
-# ── Filtre compte ─────────────────────────────────────────────────────────────
-if len(accounts) > 1:
-    choix = st.selectbox("Utilisateur", list(account_labels.values()))
-    selected_acc = next(a for a in accounts if a.get("label", a["email"]) == choix)
-    selected_df = df_all[df_all["garmin_account"] == selected_acc["email"]]
-else:
-    selected_acc = accounts[0] if accounts else None
-    selected_df = df_all
+selected_df = df_all[df_all["garmin_account"] == selected_acc["email"]] if "garmin_account" in df_all.columns else df_all
 
 # ── Récupération données natives Garmin ───────────────────────────────────────
 garmin_prs: dict[float, dict] = {}
@@ -336,15 +318,13 @@ garmin_preds: dict[float, int] = {}
 pr_raw = None
 pred_raw = None
 
-if selected_acc:
-    with st.spinner("Récupération des records et prédictions Garmin…"):
-        pr_raw = get_personal_records_native(selected_acc["email"], selected_acc["password"])
-        pred_raw = get_race_predictions_native(selected_acc["email"], selected_acc["password"])
-    garmin_prs = _parse_garmin_prs(pr_raw)
-    garmin_preds = _parse_garmin_predictions(pred_raw)
+with st.spinner("Récupération des records et prédictions Garmin…"):
+    pr_raw = get_personal_records_native(selected_acc["email"], selected_acc["password"])
+    pred_raw = get_race_predictions_native(selected_acc["email"], selected_acc["password"])
+garmin_prs = _parse_garmin_prs(pr_raw)
+garmin_preds = _parse_garmin_predictions(pred_raw)
 
 # ── Référence pour Riegel (fallback) ─────────────────────────────────────────
-# Trouver le meilleur PR connu (Garmin ou activités) pour les prédictions Riegel
 ref_dist_km, ref_time_s = None, None
 for ref_prio in [5.0, 10.0, 21.0975, 42.195, 1.0]:
     if ref_prio in garmin_prs:
@@ -366,7 +346,6 @@ predict_time_s = _build_hybrid_predictor(
 # ── Tableau records + prédictions ────────────────────────────────────────────
 rows = []
 for label, dist_km, low, high in TARGETS:
-    # PR natif Garmin
     garmin_pr = garmin_prs.get(dist_km)
     if garmin_pr:
         pr_str = format_duration_hms(int(garmin_pr["time_s"]))
@@ -385,7 +364,6 @@ for label, dist_km, low, high in TARGETS:
             pr_str = pr_pace = pr_date = "—"
             pr_source = "—"
 
-    # Prédiction natif Garmin
     garmin_pred_s = garmin_preds.get(dist_km)
     if garmin_pred_s:
         pred_str = format_duration_hms(garmin_pred_s)
@@ -421,7 +399,6 @@ if garmin_preds:
 elif not garmin_preds:
     st.caption("ℹ️ Aucune prédiction Garmin native disponible — prédictions calculées via formule de Riegel.")
 
-# ── Données brutes debug ──────────────────────────────────────────────────────
 with st.expander("🔍 Données brutes Garmin (diagnostic)", expanded=False):
     st.write("**Records natifs**")
     st.json(pr_raw)
