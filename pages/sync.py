@@ -1,5 +1,3 @@
-from urllib.parse import unquote
-
 import streamlit as st
 
 from src.garmin_client import fetch_activities, fetch_all_activities
@@ -12,12 +10,10 @@ from src.storage import (
     get_strava_app_config,
     save_accounts,
     save_activities,
-    save_strava_account,
     save_strava_app_config,
     save_strava_records_for_garmin,
 )
 from src.strava_client import (
-    exchange_code,
     fetch_strava_records,
     get_auth_url,
 )
@@ -151,45 +147,15 @@ st.caption(
     "Chaque utilisateur se connecte ensuite individuellement via OAuth."
 )
 
-# ── Retour OAuth Strava ───────────────────────────────────────────────────────
-# Quand Strava redirige vers cette page avec ?code=XXX&state=garmin_email,
-# on échange le code et on lie le compte Strava au compte Garmin correspondant.
-_oauth_code = st.query_params.get("code")
-_oauth_error = st.query_params.get("error")
-_oauth_state = unquote(st.query_params.get("state", ""))  # garmin_email encodé
-
-if _oauth_error:
-    st.error(f"❌ Strava a refusé l'autorisation : `{_oauth_error}`. Réessayez.")
-    st.query_params.clear()
-elif _oauth_code:
-    _app_cfg = get_strava_app_config()
-    if not _app_cfg or not _app_cfg.get("client_id"):
-        st.warning("⚠️ Code OAuth reçu mais configuration Strava introuvable. Configurez l'application ci-dessous.")
-    elif not _oauth_state:
-        st.warning("⚠️ Code OAuth reçu mais le compte Garmin de destination est inconnu (state manquant).")
-    else:
-        with st.spinner(f"Connexion Strava pour {_oauth_state}…"):
-            try:
-                tokens = exchange_code(
-                    _app_cfg["client_id"],
-                    _app_cfg["client_secret"],
-                    _oauth_code,
-                )
-                athlete = tokens.get("athlete") or {}
-                save_strava_account({
-                    "garmin_email": _oauth_state,
-                    "access_token": tokens["access_token"],
-                    "refresh_token": tokens["refresh_token"],
-                    "expires_at": tokens.get("expires_at", 0),
-                    "athlete": athlete,
-                })
-                athlete_name = f"{athlete.get('firstname', '')} {athlete.get('lastname', '')}".strip()
-                st.query_params.clear()
-                st.success(f"✅ Strava connecté pour **{_oauth_state}** ({athlete_name or 'athlète'}).")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"❌ Erreur OAuth Strava : {exc}")
-                st.info("Vérifiez que le Client Secret est correct. Le code expire après 10 minutes.")
+# ── Résultat de la connexion OAuth (traité dans app.py, affiché ici) ──────────
+if st.session_state.get("_strava_connect_success"):
+    _email = st.session_state.pop("_strava_connect_success")
+    _name = st.session_state.pop("_strava_connect_athlete", _email)
+    st.success(f"✅ Strava connecté pour **{_name}** ({_email}).")
+elif st.session_state.get("_strava_connect_error"):
+    _err = st.session_state.pop("_strava_connect_error")
+    st.error(f"❌ Erreur OAuth Strava : {_err}")
+    st.info("Vérifiez que le Client Secret est correct et que le code n'a pas expiré (valable 10 min).")
 
 # ── Configuration de l'application Strava (partagée) ─────────────────────────
 app_cfg = get_strava_app_config()
