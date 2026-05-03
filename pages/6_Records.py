@@ -13,7 +13,7 @@ from src.storage import (
     get_accounts,
     get_activities_df,
     get_strava_account_for_garmin,
-    get_strava_records_for_garmin,
+    get_strava_records_from_view,
 )
 from src.transform import format_duration_hms, format_pace
 
@@ -248,11 +248,12 @@ if source_filter == "Strava":
         )
         st.stop()
 
-    strava_records = get_strava_records_for_garmin(garmin_email)
+    strava_records = get_strava_records_from_view(garmin_email)
     if strava_records is None:
         st.info(
             f"ℹ️ Aucun record Strava disponible pour **{garmin_label}**. "
-            "Allez dans **Synchronisation** et cliquez sur **🔄 Sync records Strava**."
+            "Allez dans **Synchronisation** et cliquez sur **🔄 Sync Strava** "
+            "pour importer vos activités et best_efforts."
         )
         st.stop()
 
@@ -285,8 +286,8 @@ if source_filter == "Strava":
     if missing:
         st.caption(
             f"ℹ️ Distances sans record Strava : {', '.join(missing)}. "
-            "Strava ne propose pas de best_efforts pour ces distances, "
-            "ou elles n'ont pas encore été réalisées dans les activités récentes."
+            "Strava ne propose pas de best_efforts pour ces distances "
+            "(500 m, 30 km, 100 km), ou elles n'ont pas encore été réalisées."
         )
 
     with st.expander("🔍 Données brutes Strava (diagnostic)", expanded=False):
