@@ -26,7 +26,7 @@ STRAVA_AUTH_URL = "https://www.strava.com/oauth/authorize"
 STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 STRAVA_API_BASE = "https://www.strava.com/api/v3"
 
-# Noms Strava des best_efforts → distance en km (correspondance exacte avec TARGETS dans Records)
+# Noms Strava des best_efforts → distance en km (correspondance avec TARGETS dans Records)
 STRAVA_EFFORT_DISTANCES: dict[str, float] = {
     "400m":          0.4,
     "1/2 mile":      0.80467,
@@ -42,8 +42,12 @@ STRAVA_EFFORT_DISTANCES: dict[str, float] = {
 }
 
 
-def get_auth_url(client_id: str, redirect_uri: str) -> str:
-    """Construit l'URL d'autorisation OAuth Strava."""
+def get_auth_url(client_id: str, redirect_uri: str, state: str = "") -> str:
+    """
+    Construit l'URL d'autorisation OAuth Strava.
+    state : identifiant à passer en clair (ex: garmin_email) pour retrouver
+            quel compte Garmin lier au retour du redirect.
+    """
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
@@ -51,6 +55,8 @@ def get_auth_url(client_id: str, redirect_uri: str) -> str:
         "scope": "activity:read_all",
         "approval_prompt": "auto",
     }
+    if state:
+        params["state"] = state
     return f"{STRAVA_AUTH_URL}?{urlencode(params)}"
 
 
@@ -85,18 +91,23 @@ def _do_refresh(client_id: str, client_secret: str, refresh_tok: str) -> dict:
     return resp.json()
 
 
-def get_valid_access_token(credentials: dict) -> str:
-    """Retourne un access_token valide, rafraîchi si expiré."""
-    if credentials.get("expires_at", 0) > time.time() + 60:
-        return credentials["access_token"]
+def get_valid_access_token(app_config: dict, account: dict) -> str:
+    """
+    Retourne un access_token valide, en le rafraîchissant si expiré.
+
+    app_config : {client_id, client_secret}  — config partagée de l'app Strava
+    account    : {garmin_email, access_token, refresh_token, expires_at, …}
+    """
+    if account.get("expires_at", 0) > time.time() + 60:
+        return account["access_token"]
 
     new_tokens = _do_refresh(
-        credentials["client_id"],
-        credentials["client_secret"],
-        credentials["refresh_token"],
+        app_config["client_id"],
+        app_config["client_secret"],
+        account["refresh_token"],
     )
-    from src.storage import save_strava_credentials
-    save_strava_credentials({**credentials, **new_tokens})
+    from src.storage import save_strava_account
+    save_strava_account({**account, **new_tokens})
     return new_tokens["access_token"]
 
 
@@ -179,7 +190,8 @@ def _extract_best_efforts(
 
 
 def fetch_strava_records(
-    credentials: dict,
+    app_config: dict,
+    account: dict,
     max_detail_calls: int = 50,
     progress_callback=None,
 ) -> dict[float, dict]:
@@ -197,7 +209,7 @@ def fetch_strava_records(
 
     Retourne : {distance_km: {time_s, date, activity_id, activity_name, source}}
     """
-    access_token = get_valid_access_token(credentials)
+    access_token = get_valid_access_token(app_config, account)
     summaries = fetch_activity_summaries(access_token)
 
     # Priorité aux activités avec des achievements (plus susceptibles d'avoir des PRs)
@@ -213,7 +225,7 @@ def fetch_strava_records(
             if detail:
                 _extract_best_efforts(detail, activity, records)
         except RuntimeError:
-            # Rate limit hit — on s'arrête proprement avec ce qu'on a
+            # Rate limit atteint — on s'arrête proprement avec ce qu'on a
             break
         except Exception:
             continue
