@@ -141,11 +141,34 @@ st.divider()
 st.subheader("Strava")
 st.caption("Connectez votre compte Strava pour récupérer vos records.")
 
-# Détection du retour OAuth Strava (code dans l'URL après autorisation)
-strava_code = st.query_params.get("code")
-strava_scope = st.query_params.get("scope", "")
+# ── Debug Strava (toujours visible pour diagnostic) ───────────────────────────
+with st.expander("🔍 Debug Strava", expanded=False):
+    all_params = dict(st.query_params)
+    st.write("**Paramètres URL détectés :**", all_params if all_params else "_aucun_")
+    _dbg_creds = get_strava_credentials()
+    if _dbg_creds:
+        st.write("**Credentials stockés :**", {
+            "client_id": _dbg_creds.get("client_id", "—"),
+            "client_secret": "***" if _dbg_creds.get("client_secret") else "—",
+            "redirect_uri": _dbg_creds.get("redirect_uri", "—"),
+            "access_token": "présent ✅" if _dbg_creds.get("access_token") else "absent ❌",
+            "refresh_token": "présent ✅" if _dbg_creds.get("refresh_token") else "absent ❌",
+            "expires_at": _dbg_creds.get("expires_at", "—"),
+            "athlete": _dbg_creds.get("athlete", "—"),
+        })
+    else:
+        st.write("**Credentials stockés :** _aucun_")
 
-if strava_code and "activity:read_all" in strava_scope:
+# Détection du retour OAuth Strava.
+# On vérifie uniquement la présence du code (pas le scope) car Strava
+# peut retourner "read,activity:read_all" ou d'autres variantes.
+strava_code = st.query_params.get("code")
+strava_error = st.query_params.get("error")
+
+if strava_error:
+    st.error(f"❌ Strava a refusé l'autorisation : {strava_error}. Réessayez.")
+    st.query_params.clear()
+elif strava_code:
     strava_creds = get_strava_credentials()
     if strava_creds and strava_creds.get("client_id"):
         with st.spinner("Finalisation de la connexion Strava…"):
@@ -161,8 +184,9 @@ if strava_code and "activity:read_all" in strava_scope:
                 st.rerun()
             except Exception as exc:
                 st.error(f"❌ Erreur lors de la connexion OAuth Strava : {exc}")
+                st.info("Vérifiez que le Client Secret est correct et que le code n'a pas expiré (valable 10 min).")
     else:
-        st.warning("⚠️ Configurez d'abord vos identifiants Strava ci-dessous.")
+        st.warning("⚠️ Code Strava reçu mais configuration introuvable. Enregistrez vos identifiants ci-dessous d'abord.")
 
 strava_creds = get_strava_credentials()
 is_connected = bool(strava_creds and strava_creds.get("access_token"))
