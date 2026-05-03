@@ -11,12 +11,9 @@ from src.storage import (
     save_accounts,
     save_activities,
     save_strava_app_config,
-    save_strava_records_for_garmin,
 )
-from src.strava_client import (
-    fetch_strava_records,
-    get_auth_url,
-)
+from src.strava_client import get_auth_url
+from src.strava_sync import run_strava_sync
 
 st.title("🔗 Synchronisation")
 st.caption("Gérez vos comptes Garmin Connect et Strava, et synchronisez vos activités.")
@@ -239,25 +236,22 @@ else:
 
             with col_action:
                 if is_linked:
-                    if st.button("🔄 Sync records Strava", key=f"strava_sync_{garmin_email}", use_container_width=True):
-                        progress_bar = st.progress(0, text="Récupération des activités…")
-
-                        def _strava_progress(done: int, total: int) -> None:
-                            progress_bar.progress(done / total, text=f"Activité {done}/{total}…")
-
-                        with st.spinner("Récupération des records Strava…"):
+                    if st.button("🔄 Sync Strava", key=f"strava_sync_{garmin_email}", use_container_width=True):
+                        with st.spinner("Synchronisation Strava en cours…"):
                             try:
-                                records = fetch_strava_records(
-                                    app_cfg,
-                                    strava_acc,
-                                    progress_callback=_strava_progress,
+                                sync_res = run_strava_sync(app_cfg, strava_acc)
+                                st.success(
+                                    f"✅ Sync {sync_res.mode} terminée — activités: {sync_res.fetched_activities} (upserts {sync_res.upserted_activities}), "
+                                    f"détails: {sync_res.detailed_activities}, best_efforts: {sync_res.upserted_best_efforts}, appels API: {sync_res.api_calls}."
                                 )
-                                progress_bar.empty()
-                                if records:
-                                    save_strava_records_for_garmin(garmin_email, records)
-                                    st.success(f"✅ {len(records)} distance(s) enregistrée(s) pour {garmin_label}.")
-                                else:
-                                    st.info("ℹ️ Aucun record Strava trouvé sur les activités récentes.")
+                                st.caption(
+                                    f"Fenêtre chargée: min={sync_res.oldest_activity_date_loaded}, max={sync_res.latest_activity_date_loaded}, "
+                                    f"backfill_completed={sync_res.backfill_completed}"
+                                )
+                                if sync_res.rate_limit_limit and sync_res.rate_limit_usage:
+                                    st.caption(
+                                        f"Rate limit Strava (15min, jour): usage={sync_res.rate_limit_usage} / limite={sync_res.rate_limit_limit}"
+                                    )
                             except ValueError as exc:
                                 st.error(f"⚠️ {exc}")
                             except RuntimeError as exc:
