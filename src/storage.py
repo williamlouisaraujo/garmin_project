@@ -130,3 +130,48 @@ def save_setting(key: str, value: str) -> None:
         {"key": key, "value": value},
         on_conflict="key",
     ).execute()
+
+
+# ── Strava ────────────────────────────────────────────────────────────────────
+
+def get_strava_credentials() -> Optional[dict]:
+    """Retourne les credentials Strava stockés (client_id, tokens, athlete…)."""
+    val = get_setting("strava_credentials")
+    if not val:
+        return None
+    try:
+        return json.loads(val)
+    except json.JSONDecodeError:
+        return None
+
+
+def save_strava_credentials(creds: dict) -> None:
+    save_setting("strava_credentials", json.dumps(creds))
+
+
+def delete_strava_credentials() -> None:
+    db = get_supabase()
+    db.table("settings").delete().eq("key", "strava_credentials").execute()
+    db.table("settings").delete().eq("key", "strava_records").execute()
+
+
+def get_strava_records() -> Optional[dict]:
+    """
+    Retourne les records Strava mis en cache.
+    Format : {distance_km (float): {time_s, date, activity_id, activity_name, source}}
+    """
+    val = get_setting("strava_records")
+    if not val:
+        return None
+    try:
+        raw = json.loads(val)
+        # Les clés JSON sont des strings ; on les reconvertit en float
+        return {float(k): v for k, v in raw.items()}
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def save_strava_records(records: dict) -> None:
+    """Persiste les records Strava en JSON (clés converties en str pour JSON)."""
+    serializable = {str(k): v for k, v in records.items()}
+    save_setting("strava_records", json.dumps(serializable))

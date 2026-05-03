@@ -9,11 +9,10 @@ from src.garmin_client import (
     get_personal_records_native,
     get_race_predictions_native,
 )
-from src.storage import get_accounts, get_activities_df
+from src.storage import get_accounts, get_activities_df, get_strava_credentials, get_strava_records
 from src.transform import format_duration_hms, format_pace
 
 st.title("🏆 Records & Prédictions")
-st.caption("Records personnels et prédictions de course issus de Garmin Connect.")
 
 # ── Distances cibles ──────────────────────────────────────────────────────────
 TARGETS: list[tuple[str, float, float, float]] = [
@@ -53,8 +52,6 @@ _GARMIN_PRED_KEYS: dict[str, float] = {
 
 def riegel(t1_s: float, d1_km: float, d2_km: float) -> int:
     return int(t1_s * (d2_km / d1_km) ** 1.06)
-
-
 
 
 def _fit_loglog_linear(anchor_times: dict[float, int]) -> tuple[float, float] | None:
@@ -144,6 +141,7 @@ def _build_hybrid_predictor(
 
     return lambda _dist_km: None
 
+
 def best_activity_for_distance(df: pd.DataFrame, low_km: float, high_km: float) -> dict | None:
     mask = (df["distance_km"] >= low_km) & (df["distance_km"] <= high_km) & (df["duration_min"] > 0)
     candidates = df[mask].copy()
@@ -228,6 +226,85 @@ def _parse_garmin_predictions(raw) -> dict[float, int]:
             result[dist] = int(t_s)
     return result
 
+
+# ── Filtre source ─────────────────────────────────────────────────────────────
+source_filter = st.radio(
+    "Source",
+    ["Garmin", "Strava"],
+    horizontal=True,
+    key="records_source",
+)
+
+st.divider()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Branche STRAVA
+# ═════════════════════════════════════════════════════════════════════════════
+if source_filter == "Strava":
+    st.caption("Records personnels issus de Strava.")
+
+    try:
+        strava_creds = get_strava_credentials()
+        strava_cached = get_strava_records()
+    except Exception as exc:
+        st.error(f"❌ Supabase inaccessible : {exc}")
+        st.stop()
+
+    if not strava_creds or not strava_creds.get("access_token"):
+        st.info("ℹ️ Connectez votre compte Strava depuis la page **Synchronisation**.")
+        st.stop()
+
+    if strava_cached is None:
+        st.info(
+            "ℹ️ Aucun record Strava disponible. "
+            "Cliquez sur **🔄 Sync records** dans la page Synchronisation."
+        )
+        st.stop()
+
+    rows = []
+    for label, dist_km, _low, _high in TARGETS:
+        record = strava_cached.get(dist_km)
+        if record:
+            t_s = int(record["time_s"])
+            rows.append({
+                "Distance": label,
+                "Record": format_duration_hms(t_s),
+                "Allure": format_pace(t_s / 60 / dist_km),
+                "Date": record.get("date", "—"),
+                "Activité": record.get("activity_name", "—"),
+                "Source": "Strava ✅",
+            })
+        else:
+            rows.append({
+                "Distance": label,
+                "Record": "—",
+                "Allure": "—",
+                "Date": "—",
+                "Activité": "—",
+                "Source": "—",
+            })
+
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    covered = [label for label, dist_km, *_ in TARGETS if dist_km in strava_cached]
+    missing = [label for label, dist_km, *_ in TARGETS if dist_km not in strava_cached]
+    if missing:
+        st.caption(
+            f"ℹ️ Distances non couvertes par Strava : {', '.join(missing)}. "
+            "Strava ne propose pas de best_efforts pour ces distances ou elles "
+            "n'ont pas encore été réalisées dans vos activités récentes."
+        )
+
+    # Debug Strava
+    with st.expander("🔍 Données brutes Strava (diagnostic)", expanded=False):
+        st.json({str(k): v for k, v in strava_cached.items()})
+
+    st.stop()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Branche GARMIN (comportement existant, inchangé)
+# ═════════════════════════════════════════════════════════════════════════════
+st.caption("Records personnels et prédictions de course issus de Garmin Connect.")
 
 # ── Chargement ────────────────────────────────────────────────────────────────
 try:
@@ -350,4 +427,3 @@ with st.expander("🔍 Données brutes Garmin (diagnostic)", expanded=False):
     st.json(pr_raw)
     st.write("**Prédictions natives**")
     st.json(pred_raw)
-
