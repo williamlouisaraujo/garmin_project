@@ -159,11 +159,57 @@ def run_strava_sync(app_config: dict, strava_account: dict, max_activity_calls: 
         result.latest_activity_date_loaded = latest_loaded
         result.oldest_activity_date_loaded = oldest_loaded
 
-    # Detail sync for run activities not yet detailed
-    run_ids = [a["id"] for a in activities if a.get("type") in ("Run", "TrailRun")]
-    details_existing = db.table("strava_activity_details").select("activity_id").in_("activity_id", run_ids).execute().data if run_ids else []
-    detailed_ids = {r["activity_id"] for r in (details_existing or [])}
-    to_detail = [aid for aid in run_ids if aid not in detailed_ids][:max_detail_calls]
+    # Detail sync: prioritise current batch, then backfill any historical gaps
+    run_ids_batch = [a["id"] for a in activities if a.get("type") in ("Run", "TrailRun")]
+    if run_ids_batch:
+        already_in_batch = {
+            r["activity_id"]
+            for r in (
+                db.table("strava_activity_details")
+                .select("activity_id")
+                .in_("activity_id", run_ids_batch)
+                .execute()
+                .data or []
+            )
+        }
+        to_detail = [aid for aid in run_ids_batch if aid not in already_in_batch]
+    else:
+        to_detail = []
+
+    # Fill remaining budget with historical run activities that have no detail yet
+    remaining = max_detail_calls - len(to_detail)
+    if remaining > 0:
+        all_run_ids = {
+            r["activity_id"]
+            for r in (
+                db.table("strava_activities")
+                .select("activity_id")
+                .eq("user_id", user_id)
+                .in_("type", ["Run", "TrailRun"])
+                .limit(5000)
+                .execute()
+                .data or []
+            )
+        }
+        all_detailed_ids = {
+            r["activity_id"]
+            for r in (
+                db.table("strava_activity_details")
+                .select("activity_id")
+                .eq("user_id", user_id)
+                .limit(5000)
+                .execute()
+                .data or []
+            )
+        }
+        batch_set = set(run_ids_batch)
+        missing_history = sorted(
+            (aid for aid in all_run_ids if aid not in all_detailed_ids and aid not in batch_set),
+            reverse=True,  # plus récent en premier
+        )
+        to_detail.extend(missing_history[:remaining])
+
+    to_detail = to_detail[:max_detail_calls]
 
     for aid in to_detail:
         detail, headers = _api_get(access_token, f"activities/{aid}")
