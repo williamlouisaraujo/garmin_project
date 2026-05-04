@@ -62,7 +62,8 @@ create table if not exists strava_sync_state (
   updated_at timestamptz not null default now()
 );
 
-create or replace view vw_strava_records as
+drop view if exists vw_strava_records;
+create view vw_strava_records as
 with normalized as (
   select
     be.user_id,
