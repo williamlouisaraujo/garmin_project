@@ -1,6 +1,9 @@
 -- Patch : ajout de activity_name dans vw_strava_records via join strava_activities
 -- À appliquer dans l'éditeur SQL Supabase (Run once)
-create or replace view vw_strava_records as
+-- DROP + CREATE nécessaire car PostgreSQL interdit de réordonner les colonnes
+-- d'une vue existante avec CREATE OR REPLACE.
+drop view if exists vw_strava_records;
+create view vw_strava_records as
 with normalized as (
   select
     be.user_id,
