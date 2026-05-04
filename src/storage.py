@@ -215,49 +215,76 @@ def save_strava_account(strava_account: dict) -> None:
 
 
 def delete_strava_account(garmin_email: str) -> None:
-    """Supprime le compte Strava et ses records associés pour ce compte Garmin."""
+    """Délie le compte Strava de ce compte Garmin."""
     accounts = [a for a in get_strava_accounts() if a.get("garmin_email") != garmin_email]
     save_strava_accounts(accounts)
-    all_records = _get_all_strava_records()
-    all_records.pop(garmin_email, None)
-    _save_all_strava_records(all_records)
 
 
-# ── Strava : records (un set par compte Garmin) ───────────────────────────────
+# ── Strava : records (depuis vw_strava_records dans Supabase) ─────────────────
 
-def _get_all_strava_records() -> dict:
-    """Structure interne : {garmin_email: {dist_km_str: record_dict}}"""
-    val = get_setting("strava_records")
-    if not val:
-        return {}
-    try:
-        return json.loads(val)
-    except json.JSONDecodeError:
-        return {}
-
-
-def _save_all_strava_records(data: dict) -> None:
-    save_setting("strava_records", json.dumps(data))
+_STRAVA_METERS_TO_KM: dict[float, float] = {
+    1000.0:    1.0,
+    5000.0:    5.0,
+    10000.0:  10.0,
+    21097.5:  21.0975,
+    42195.0:  42.195,
+    50000.0:  50.0,
+}
 
 
-def get_strava_records_for_garmin(garmin_email: str) -> Optional[dict]:
+def get_strava_records_from_view(garmin_email: str) -> Optional[dict[float, dict]]:
     """
-    Records Strava pour un compte Garmin donné.
-    Retourne {distance_km (float): {time_s, date, activity_id, activity_name, source}}
-    ou None si aucune donnée disponible.
+    Retourne les records Strava depuis vw_strava_records (Supabase).
+    Résultat : {distance_km (float): {time_s, date, activity_id, activity_name, source}}
+    ou None si l'utilisateur n'existe pas ou n'a aucun best_effort synchronisé.
     """
-    all_data = _get_all_strava_records()
-    user_data = all_data.get(garmin_email)
-    if not user_data:
+    db = get_supabase()
+
+    user_rows = (
+        db.table("user_accounts")
+        .select("user_id")
+        .eq("garmin_user_id", garmin_email)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not user_rows:
         return None
-    try:
-        return {float(k): v for k, v in user_data.items()}
-    except (ValueError, AttributeError):
+    user_id = user_rows[0]["user_id"]
+
+    rows = (
+        db.table("vw_strava_records")
+        .select("normalized_distance,best_elapsed_time,activity_id,activity_name,start_date")
+        .eq("user_id", user_id)
+        .execute()
+        .data
+    )
+    if not rows:
         return None
 
+    result: dict[float, dict] = {}
+    for row in rows:
+        dist_m = float(row["normalized_distance"])
+        dist_km = next(
+            (km for m, km in _STRAVA_METERS_TO_KM.items() if abs(m - dist_m) < 1.0),
+            None,
+        )
+        if dist_km is None:
+            continue
+        t_s = row.get("best_elapsed_time")
+        if not t_s:
+            continue
+        start_date = row.get("start_date") or ""
+        try:
+            date_str = datetime.fromisoformat(start_date.replace("Z", "")).strftime("%d/%m/%Y")
+        except Exception:
+            date_str = "—"
+        result[dist_km] = {
+            "time_s": float(t_s),
+            "date": date_str,
+            "activity_id": row.get("activity_id"),
+            "activity_name": row.get("activity_name") or "—",
+            "source": "Strava",
+        }
 
-def save_strava_records_for_garmin(garmin_email: str, records: dict) -> None:
-    """Persiste les records Strava pour un compte Garmin (clés float → str pour JSON)."""
-    all_data = _get_all_strava_records()
-    all_data[garmin_email] = {str(k): v for k, v in records.items()}
-    _save_all_strava_records(all_data)
+    return result if result else None
